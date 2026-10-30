@@ -7,6 +7,7 @@ from frontend.profile_page import render_profile_page
 from frontend.styles import apply_styles
 from frontend.dashboard import render_dashboard
 from frontend.mandi_page import render_mandi_page
+from frontend.schemes_page import render_schemes_page
 
 
 st.set_page_config(
@@ -38,17 +39,11 @@ else:
 
     # Mandi prices.
     elif selected_page == "Mandi Prices":
-        from frontend.mandi_page import render_mandi_page
-
         render_mandi_page()
 
     # Government schemes.
     elif selected_page == "Government Schemes":
-        st.title("🏛️ Government Schemes")
-        st.info(
-            "Government scheme discovery will be connected "
-            "after the Mandi Prices module."
-        )
+        render_schemes_page()
 
     # Crop disease detection.
     elif selected_page == "Crop Disease Detection":
