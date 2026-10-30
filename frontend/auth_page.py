@@ -1,6 +1,9 @@
 
-import streamlit as st
 import requests
+import streamlit as st
+
+from frontend.voice_registration import render_voice_registration
+
 
 API_URL = "http://127.0.0.1:8000/api"
 
@@ -105,6 +108,7 @@ TEXT = {
         "needs_error": "ಕನಿಷ್ಠ ಒಂದು ಸೇವೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ.",
         "mobile_error": "ಸರಿಯಾದ 10 ಅಂಕಿಯ ಮೊಬೈಲ್ ಸಂಖ್ಯೆ ನಮೂದಿಸಿ.",
         "password_length_error": "ಪಾಸ್‌ವರ್ಡ್ ಕನಿಷ್ಠ 8 ಅಕ್ಷರಗಳಿರಬೇಕು.",
+        "voice_signup": "🎙️ ಧ್ವನಿ ಮೂಲಕ ನೋಂದಣಿ",
     },
 
     "en": {
@@ -194,9 +198,14 @@ TEXT = {
         "needs_error": "Select at least one service.",
         "mobile_error": "Enter a valid 10-digit mobile number.",
         "password_length_error": "Password must be at least 8 characters.",
+        "voice_signup": "🎙️ Voice Registration",
     }
 }
 
+
+# ---------------------------------------------------------
+# INITIALIZE FORM
+# ---------------------------------------------------------
 
 def initialize_form():
     defaults = {
@@ -222,12 +231,18 @@ def save_step(values):
     st.session_state.km_signup_data.update(values)
 
 
+# ---------------------------------------------------------
+# MAIN AUTHENTICATION PAGE
+# ---------------------------------------------------------
+
 def render_auth_page():
+
     initialize_form()
 
     lang = st.session_state.km_language
     t = TEXT[lang]
 
+    # Header and language selection
     left, right = st.columns([3, 1])
 
     with left:
@@ -242,7 +257,9 @@ def render_auth_page():
             key="km_language_selector",
         )
 
-        new_language = "kn" if selected_language == "ಕನ್ನಡ" else "en"
+        new_language = (
+            "kn" if selected_language == "ಕನ್ನಡ" else "en"
+        )
 
         if new_language != lang:
             st.session_state.km_language = new_language
@@ -250,17 +267,29 @@ def render_auth_page():
 
     st.divider()
 
-    signup_tab, login_tab = st.tabs([t["signup"], t["login"]])
+    # Three authentication options
+    signup_tab, voice_tab, login_tab = st.tabs([
+        t["signup"],
+        t["voice_signup"],
+        t["login"],
+    ])
+
+    # -----------------------------------------------------
+    # NORMAL SIGNUP
+    # -----------------------------------------------------
 
     with signup_tab:
+
         step = st.session_state.km_signup_step
         data = st.session_state.km_signup_data
 
         st.progress(step / 4)
+
         st.caption(f"{t['step']} {step} / 4")
 
         # STEP 1: ACCOUNT DETAILS
         if step == 1:
+
             st.subheader(t["account_heading"])
 
             name = field("full_name", t["name"])
@@ -282,7 +311,9 @@ def render_auth_page():
                 t["next"],
                 type="primary",
                 use_container_width=True,
+                key="signup_step1_next",
             ):
+
                 if (
                     not name.strip()
                     or not mobile.strip()
@@ -312,6 +343,7 @@ def render_auth_page():
 
         # STEP 2: LOCATION
         elif step == 2:
+
             st.subheader(t["location_heading"])
 
             district = st.selectbox(
@@ -330,7 +362,9 @@ def render_auth_page():
                 t["next"],
                 type="primary",
                 use_container_width=True,
+                key="signup_step2_next",
             ):
+
                 if not district:
                     st.error(t["required"])
 
@@ -345,6 +379,7 @@ def render_auth_page():
 
         # STEP 3: FARM DETAILS
         elif step == 3:
+
             st.subheader(t["farm_heading"])
 
             land_area = st.number_input(
@@ -409,7 +444,9 @@ def render_auth_page():
                 t["next"],
                 type="primary",
                 use_container_width=True,
+                key="signup_step3_next",
             ):
+
                 if land_area <= 0:
                     st.error(t["land_error"])
 
@@ -444,11 +481,23 @@ def render_auth_page():
 
         # STEP 4: REVIEW AND SUBMIT
         elif step == 4:
+
             st.subheader(t["review_heading"])
 
-            st.write(f"**{t['name']}:** {data.get('full_name', '')}")
-            st.write(f"**{t['mobile']}:** {data.get('mobile', '')}")
-            st.write(f"**{t['district']}:** {data.get('district', '')}")
+            st.write(
+                f"**{t['name']}:** "
+                f"{data.get('full_name', '')}"
+            )
+
+            st.write(
+                f"**{t['mobile']}:** "
+                f"{data.get('mobile', '')}"
+            )
+
+            st.write(
+                f"**{t['district']}:** "
+                f"{data.get('district', '')}"
+            )
 
             st.write(
                 f"**{t['land']}:** "
@@ -470,13 +519,18 @@ def render_auth_page():
                 t["submit"],
                 type="primary",
                 use_container_width=True,
+                key="signup_create_account",
             ):
+
                 profile_payload = {
                     "full_name": data["full_name"],
-                    "preferred_language": data.get("preferred_language", "kn"),
+                    "preferred_language": data.get(
+                        "preferred_language",
+                        "kn",
+                    ),
                     "state": data.get("state", "Karnataka"),
                     "district": data["district"],
-                    "land_area": data["land_area"],
+                    "land_area": str(data["land_area"]),
                     "land_unit": data["land_unit"],
                     "land_ownership": data["land_ownership"],
                     "crops": data["crops"],
@@ -492,6 +546,7 @@ def render_auth_page():
                 }
 
                 try:
+
                     response = requests.post(
                         f"{API_URL}/auth/signup",
                         json=payload,
@@ -499,31 +554,60 @@ def render_auth_page():
                     )
 
                     if response.status_code in [200, 201]:
+
                         result = response.json()
 
                         st.session_state.km_token = result["access_token"]
                         st.session_state.km_mobile = data["mobile"]
                         st.session_state.km_logged_in = True
+
                         st.session_state.km_signup_data = {}
                         st.session_state.km_signup_step = 1
 
                         st.success(t["success"])
+
                         st.rerun()
 
                     else:
-                        st.error(response.text)
+
+                        try:
+                            detail = response.json().get(
+                                "detail",
+                                response.text,
+                            )
+                        except ValueError:
+                            detail = response.text
+
+                        st.error(detail)
 
                 except requests.RequestException as error:
                     st.error(f"Server connection error: {error}")
 
         # BACK BUTTON
         if step > 1:
-            if st.button(t["back"], use_container_width=True):
+
+            if st.button(
+                t["back"],
+                use_container_width=True,
+                key="signup_back",
+            ):
                 st.session_state.km_signup_step -= 1
                 st.rerun()
 
+    # -----------------------------------------------------
+    # VOICE REGISTRATION
+    # -----------------------------------------------------
+
+    with voice_tab:
+
+        render_voice_registration()
+
+    # -----------------------------------------------------
     # LOGIN
+    # -----------------------------------------------------
+
     with login_tab:
+
         st.subheader(t["login"])
 
         mobile = st.text_input(
@@ -541,12 +625,17 @@ def render_auth_page():
             t["login_button"],
             type="primary",
             use_container_width=True,
+            key="login_submit",
         ):
+
             if not mobile or not password:
+
                 st.error(t["required"])
 
             else:
+
                 try:
+
                     response = requests.post(
                         f"{API_URL}/auth/login",
                         json={
@@ -557,6 +646,7 @@ def render_auth_page():
                     )
 
                     if response.status_code == 200:
+
                         result = response.json()
 
                         st.session_state.km_token = result["access_token"]
@@ -566,7 +656,16 @@ def render_auth_page():
                         st.rerun()
 
                     else:
-                        st.error(response.text)
+
+                        try:
+                            detail = response.json().get(
+                                "detail",
+                                response.text,
+                            )
+                        except ValueError:
+                            detail = response.text
+
+                        st.error(detail)
 
                 except requests.RequestException as error:
                     st.error(f"Server connection error: {error}")
