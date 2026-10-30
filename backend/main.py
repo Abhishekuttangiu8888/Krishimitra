@@ -9,6 +9,7 @@ from backend.database.connection import create_database_tables
 from backend.api.auth_routes import router as auth_router
 from backend.api.farmer_routes import router as farmer_router
 from backend.api.voice_routes import router as voice_router
+from backend.api.chat_routes import router as chat_router
 
 
 @asynccontextmanager
@@ -50,6 +51,11 @@ app.include_router(
 
 app.include_router(
     voice_router,
+    prefix="/api",
+)
+
+app.include_router(
+    chat_router,
     prefix="/api",
 )
 
