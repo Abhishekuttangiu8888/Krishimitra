@@ -1,4 +1,3 @@
-
 import os
 import base64
 
@@ -13,9 +12,26 @@ class SarvamTTSError(Exception):
     pass
 
 
-def speak_text(text: str) -> bytes:
+# Language configuration
+TTS_CONFIG = {
+    "kn": {
+        "language_code": "kn-IN",
+        "speaker": "chaitra_kn_conversation",
+    },
+    "en": {
+        "language_code": "en-IN",
+        "speaker": "meera",  # English voice
+    },
+}
+
+
+def speak_text(text: str, language: str = "kn") -> bytes:
     """
-    Convert Kannada text into female voice audio.
+    Convert text into speech in the selected language.
+
+    Args:
+        text: Text to convert into speech.
+        language: 'kn' for Kannada or 'en' for English.
 
     Returns:
         WAV audio as bytes.
@@ -32,6 +48,11 @@ def speak_text(text: str) -> bytes:
     if len(text) > 2500:
         raise SarvamTTSError("Text exceeds the 2500-character limit.")
 
+    if language not in TTS_CONFIG:
+        language = "kn"
+
+    config = TTS_CONFIG[language]
+
     try:
         client = SarvamAI(
             api_subscription_key=api_key
@@ -40,8 +61,8 @@ def speak_text(text: str) -> bytes:
         response = client.text_to_speech.convert(
             text=text.strip(),
             model="bulbul:v4-flash",
-            language_code="kn-IN",
-            speaker="chaitra_kn_conversation",
+            language_code=config["language_code"],
+            speaker=config["speaker"],
             output_audio_codec="wav"
         )
 

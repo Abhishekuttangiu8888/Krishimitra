@@ -18,7 +18,6 @@ st.set_page_config(
 
 from frontend.auth_page import render_auth_page
 from frontend.components.sidebar import render_sidebar
-
 from frontend.styles import apply_styles
 
 from frontend.dashboard import render_dashboard
@@ -26,6 +25,15 @@ from frontend.mandi_page import render_mandi_page
 from frontend.schemes_page import render_schemes_page
 from frontend.disease_page import render_disease_page
 from frontend.profile_page import render_profile_page
+
+from frontend.i18n import initialize_language
+
+
+# --------------------------------------------------
+# INITIALIZE LANGUAGE
+# --------------------------------------------------
+
+initialize_language()
 
 
 # --------------------------------------------------
@@ -73,14 +81,14 @@ if selected_page == "Home":
     render_dashboard()
 
 
-elif selected_page == "Mandi Prices":
-
-    render_mandi_page()
-
-
 elif selected_page == "Government Schemes":
 
     render_schemes_page()
+
+
+elif selected_page == "Mandi Prices":
+
+    render_mandi_page()
 
 
 elif selected_page == "Crop Disease Detection":

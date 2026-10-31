@@ -1,12 +1,13 @@
-
 import os
-from typing import Optional
+from typing import Optional, Literal
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
 load_dotenv()
+
+LanguageCode = Literal["kn", "en"]
 
 
 class GeminiAPIError(Exception):
@@ -28,21 +29,35 @@ def get_model_name() -> str:
 
 
 def get_system_instruction(
-    farmer_profile: Optional[dict] = None
+    farmer_profile: Optional[dict] = None,
+    language: LanguageCode = "kn",
 ) -> str:
 
-    instruction = """
+    language_instruction = (
+        "Respond ONLY in natural Kannada. "
+        "Use simple Kannada that ordinary farmers can understand. "
+        "Do not switch to English unless the user specifically asks for it."
+        if language == "kn"
+        else
+        "Respond ONLY in clear, simple English. "
+        "Use language that ordinary farmers can understand. "
+        "Do not switch to Kannada unless the user specifically asks for it."
+    )
+
+    instruction = f"""
 You are KRISHI MITRA, a friendly and intelligent AI assistant.
 
 PURPOSE:
 Help farmers with agriculture while also answering general questions.
 
 LANGUAGE:
-1. Understand Kannada, English and mixed-language messages.
-2. Reply in the language used by the user.
-3. If the user speaks Kannada, respond in natural Kannada.
+1. {language_instruction}
+2. Understand Kannada, English and mixed-language messages.
+3. The selected application language takes priority over the language
+   used in the user's latest message.
 4. Use simple language ordinary farmers can understand.
 5. Avoid unnecessarily complicated technical terms.
+6. Keep crop names and technical terms understandable.
 
 CONVERSATION:
 1. Understand the complete meaning of the user's message.
@@ -117,11 +132,15 @@ def generate_reply(
     message: str,
     history: Optional[list] = None,
     farmer_profile: Optional[dict] = None,
+    language: LanguageCode = "kn",
 ) -> str:
     """Generate a conversational response using Gemini."""
 
     if not message or not message.strip():
         raise GeminiAPIError("Message cannot be empty.")
+
+    if language not in ("kn", "en"):
+        language = "kn"
 
     try:
         client = get_gemini_client()
@@ -163,7 +182,8 @@ def generate_reply(
             contents=conversation,
             config=types.GenerateContentConfig(
                 system_instruction=get_system_instruction(
-                    farmer_profile
+                    farmer_profile=farmer_profile,
+                    language=language,
                 ),
                 temperature=0.5,
                 max_output_tokens=1200,
@@ -196,6 +216,7 @@ def analyze_crop_disease(
     affected_part: str = "",
     duration: str = "",
     farmer_profile: Optional[dict] = None,
+    language: LanguageCode = "kn",
 ) -> dict:
     """Analyze a crop image using Gemini vision."""
 
@@ -213,6 +234,15 @@ def analyze_crop_disease(
 
     if not crop_name or not crop_name.strip():
         raise GeminiAPIError("Please provide the crop name.")
+
+    if language not in ("kn", "en"):
+        language = "kn"
+
+    response_language = (
+        "natural Kannada"
+        if language == "kn"
+        else "simple English"
+    )
 
     profile_context = ""
 
@@ -237,6 +267,10 @@ Duration: {duration or "Not specified"}
 
 {profile_context}
 
+LANGUAGE:
+Write your complete analysis in {response_language}.
+Use simple language suitable for farmers.
+
 IMPORTANT RULES:
 1. This is a preliminary assessment, not a confirmed diagnosis.
 2. Do not invent symptoms that are not visible.
@@ -249,10 +283,7 @@ IMPORTANT RULES:
 9. Do not claim a treatment is officially approved unless verified.
 10. Recommend local KVK or agricultural expert advice when needed.
 
-Respond in simple language suitable for farmers.
-Use Kannada if the farmer's preferred language is Kannada.
-
-Use these headings:
+Use these headings, translated into the selected language:
 
 IMAGE QUALITY:
 OBSERVATIONS:

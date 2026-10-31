@@ -1,6 +1,6 @@
-
 import os
 from io import BytesIO
+from typing import Literal
 
 from dotenv import load_dotenv
 from sarvamai import SarvamAI
@@ -15,8 +15,10 @@ class SarvamAPIError(Exception):
 
 def transcribe_audio(
     audio_bytes: bytes,
-    filename: str = "recording.wav"
+    filename: str = "recording.wav",
+    language: Literal["kn", "en"] = "kn",
 ) -> dict:
+    """Transcribe audio using Sarvam AI."""
 
     api_key = os.getenv("SARVAM_API_KEY")
 
@@ -26,8 +28,19 @@ def transcribe_audio(
     if not audio_bytes:
         raise SarvamAPIError("No audio was provided.")
 
+    if language not in ("kn", "en"):
+        language = "kn"
+
+    language_code = (
+        "kn-IN"
+        if language == "kn"
+        else "en-IN"
+    )
+
     try:
-        client = SarvamAI(api_subscription_key=api_key)
+        client = SarvamAI(
+            api_subscription_key=api_key
+        )
 
         audio_file = BytesIO(audio_bytes)
         audio_file.name = filename
@@ -35,7 +48,8 @@ def transcribe_audio(
         response = client.speech_to_text.transcribe(
             file=audio_file,
             model="saaras:v4",
-            mode="transcribe"
+            mode="transcribe",
+            language_code=language_code,
         )
 
         recognized_text = response.transcript.strip()
@@ -46,7 +60,8 @@ def transcribe_audio(
             )
 
         return {
-            "text": recognized_text
+            "text": recognized_text,
+            "language": language_code,
         }
 
     except SarvamAPIError:

@@ -1,4 +1,3 @@
-
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -28,6 +27,8 @@ class ChatRequest(BaseModel):
         max_length=12,
     )
 
+    language: Literal["kn", "en"] = "kn"
+
 
 class ChatResponse(BaseModel):
     success: bool
@@ -46,6 +47,7 @@ def chat_message(request: ChatRequest):
         reply = generate_reply(
             message=request.message,
             history=history,
+            language=request.language,
         )
 
         return ChatResponse(

@@ -1,9 +1,10 @@
-
 import base64
 from pathlib import Path
 
 import requests
 import streamlit as st
+
+from frontend.i18n import t, get_current_language
 
 
 CHAT_API_URL = "http://127.0.0.1:8000/api/chat/message"
@@ -39,6 +40,8 @@ def clear_chat():
 
 
 def transcribe_audio(audio_file):
+    language = get_current_language()
+
     try:
         response = requests.post(
             TRANSCRIBE_API_URL,
@@ -49,6 +52,9 @@ def transcribe_audio(audio_file):
                     "audio/wav",
                 )
             },
+            data={
+                "language": language,
+            },
             timeout=60,
         )
 
@@ -57,21 +63,23 @@ def transcribe_audio(audio_file):
         transcript = response.json().get("text", "").strip()
 
         if not transcript:
-            st.error("ಧ್ವನಿ ಗುರುತಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.")
+            st.error(t("voice_not_recognized"))
             return None
 
         return transcript
 
-    except requests.exceptions.RequestException as error:
-        st.error(f"Voice service error: {error}")
-    except Exception as error:
-        st.error(f"Voice error: {error}")
+    except requests.exceptions.RequestException:
+        st.error(t("voice_service_error"))
+
+    except Exception:
+        st.error(t("voice_error"))
 
     return None
 
 
 def send_message(message):
     history = st.session_state.km_chat_history[-12:]
+    language = get_current_language()
 
     try:
         response = requests.post(
@@ -79,6 +87,7 @@ def send_message(message):
             json={
                 "message": message,
                 "history": history,
+                "language": language,
             },
             timeout=90,
         )
@@ -89,30 +98,38 @@ def send_message(message):
         reply = result.get("reply", "").strip()
 
         if not result.get("success") or not reply:
-            st.error("ಉತ್ತರ ಪಡೆಯಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.")
+            st.error(t("answer_unavailable"))
             return False
 
         st.session_state.km_chat_history.extend([
-            {"role": "user", "content": message},
-            {"role": "assistant", "content": reply},
+            {
+                "role": "user",
+                "content": message,
+            },
+            {
+                "role": "assistant",
+                "content": reply,
+            },
         ])
 
         return True
 
     except requests.exceptions.ConnectionError:
-        st.error("KRISHI MITRA backend ಚಾಲನೆಯಲ್ಲಿದೆಯೇ ಪರಿಶೀಲಿಸಿ.")
+        st.error(t("backend_not_running"))
+
     except requests.exceptions.Timeout:
-        st.error("ಉತ್ತರ ಪಡೆಯಲು ಹೆಚ್ಚು ಸಮಯ ತೆಗೆದುಕೊಳ್ಳುತ್ತಿದೆ.")
+        st.error(t("chat_timeout"))
+
     except requests.exceptions.HTTPError as error:
         try:
             detail = response.json().get("detail", str(error))
         except Exception:
             detail = str(error)
 
-        st.error(f"Chat API error: {detail}")
+        st.error(f"{t('chat_api_error')}: {detail}")
 
     except Exception as error:
-        st.error(f"Error: {error}")
+        st.error(f"{t('general_error')}: {error}")
 
     return False
 
@@ -189,7 +206,7 @@ def render_voice_interface():
         }}
 
         .st-key-km_floating_chat .st-key-km_open_chat button:hover::before {{
-            content: "Chat with KRISHI MITRA" !important;
+            content: "{t('chat_with_krishi_mitra')}" !important;
             position: absolute !important;
             right: 88px !important;
             top: 18px !important;
@@ -209,6 +226,7 @@ def render_voice_interface():
         }}
         </style>
         """
+
     else:
         launcher_css = """
         <style>
@@ -221,7 +239,10 @@ def render_voice_interface():
         </style>
         """
 
-    st.markdown(launcher_css, unsafe_allow_html=True)
+    st.markdown(
+        launcher_css,
+        unsafe_allow_html=True,
+    )
 
     with st.container(key="km_floating_chat"):
 
@@ -230,7 +251,7 @@ def render_voice_interface():
             if st.button(
                 " ",
                 key="km_open_chat",
-                help="Chat with KRISHI MITRA",
+                help=t("chat_with_krishi_mitra"),
                 type="primary",
             ):
                 st.session_state.km_chat_open = True
@@ -243,20 +264,23 @@ def render_voice_interface():
                 title_col, close_col = st.columns([5, 1])
 
                 with title_col:
-                    st.markdown("### 🌱 KRISHI MITRA")
+                    st.markdown(
+                        f"### 🌱 {t('app_name')}"
+                    )
 
                 with close_col:
-                    if st.button("✕", key="km_close_chat"):
+                    if st.button(
+                        "✕",
+                        key="km_close_chat",
+                        help=t("close"),
+                    ):
                         st.session_state.km_chat_open = False
                         st.rerun()
 
-                st.caption(
-                    "ಕನ್ನಡ ಅಥವಾ English ನಲ್ಲಿ ಕೇಳಿ. "
-                    "ಮಾತನಾಡಲು ಮೈಕ್ರೊಫೋನ್ ಒತ್ತಿರಿ."
-                )
+                st.caption(t("chat_instructions"))
 
                 if st.button(
-                    "🗑️ Clear conversation",
+                    f"🗑️ {t('clear_conversation')}",
                     key="km_clear_chat",
                 ):
                     clear_chat()
@@ -265,11 +289,11 @@ def render_voice_interface():
 
                     if not st.session_state.km_chat_history:
                         st.markdown(
-                            "ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ KRISHI MITRA. "
-                            "ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?"
+                            t("chat_greeting")
                         )
 
                     for message in st.session_state.km_chat_history:
+
                         with st.chat_message(
                             message["role"],
                             avatar=(
@@ -281,25 +305,39 @@ def render_voice_interface():
                             st.markdown(message["content"])
 
                 prompt = st.chat_input(
-                    "ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಬರೆಯಿರಿ ಅಥವಾ ಮಾತನಾಡಿ...",
+                    t("chat_input_placeholder"),
                     accept_audio=True,
                     audio_sample_rate=16000,
                     key="km_floating_chat_input",
                 )
 
                 if prompt is not None:
-                    user_message = (prompt.text or "").strip()
+
+                    user_message = (
+                        prompt.text or ""
+                    ).strip()
 
                     if prompt.audio is not None:
-                        with st.spinner("ನಿಮ್ಮ ಧ್ವನಿಯನ್ನು ಗುರುತಿಸಲಾಗುತ್ತಿದೆ..."):
-                            transcript = transcribe_audio(prompt.audio)
+
+                        with st.spinner(
+                            t("recognizing_voice")
+                        ):
+                            transcript = transcribe_audio(
+                                prompt.audio
+                            )
 
                         if transcript:
                             user_message = transcript
-                            st.info(f"ನೀವು ಹೇಳಿದ್ದು: {transcript}")
+
+                            st.info(
+                                f"{t('you_said')}: {transcript}"
+                            )
 
                     if user_message:
-                        with st.spinner("KRISHI MITRA ಉತ್ತರಿಸುತ್ತಿದೆ..."):
+
+                        with st.spinner(
+                            t("assistant_responding")
+                        ):
                             send_message(user_message)
 
                         st.rerun()

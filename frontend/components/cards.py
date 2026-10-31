@@ -11,33 +11,31 @@ def navigate_to(page):
 
 def render_service_cards():
 
-    st.markdown(
-        f"## {t('services')}",
-    )
+    st.markdown(f"## {t('services')}")
 
     services = [
         {
             "icon": "🏛️",
-            "title": "ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು",
-            "description": "ನಿಮ್ಮ ಕೃಷಿಗೆ ಸೂಕ್ತವಾದ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳನ್ನು ಹುಡುಕಿ",
+            "title": t("government_schemes"),
+            "description": t("schemes_card_description"),
             "page": "Government Schemes",
         },
         {
             "icon": "🌾",
-            "title": "ಮಾರುಕಟ್ಟೆ ಬೆಲೆಗಳು",
-            "description": "ನಿಮ್ಮ ಹತ್ತಿರದ ಮಾರುಕಟ್ಟೆಗಳ ಬೆಲೆಗಳನ್ನು ತಿಳಿಯಿರಿ",
+            "title": t("mandi_prices"),
+            "description": t("mandi_card_description"),
             "page": "Mandi Prices",
         },
         {
             "icon": "🍃",
-            "title": "ಬೆಳೆ ರೋಗ ಪತ್ತೆ",
-            "description": "ಬೆಳೆಗಳ ರೋಗಗಳ ಬಗ್ಗೆ ಮಾಹಿತಿ ಪಡೆಯಿರಿ",
+            "title": t("crop_disease_detection"),
+            "description": t("disease_card_description"),
             "page": "Crop Disease Detection",
         },
         {
             "icon": "👨‍🌾",
-            "title": "ರೈತರ ವಿವರಗಳು",
-            "description": "ನಿಮ್ಮ ಕೃಷಿ ವಿವರಗಳನ್ನು ನಿರ್ವಹಿಸಿ",
+            "title": t("profile"),
+            "description": t("profile_card_description"),
             "page": "Profile",
         },
     ]
@@ -52,20 +50,17 @@ def render_service_cards():
         ):
 
             with col:
+
                 with st.container(border=True):
 
-                    st.markdown(
-                        f"## {service['icon']}"
-                    )
+                    st.markdown(f"## {service['icon']}")
 
-                    st.markdown(
-                        f"### {service['title']}"
-                    )
+                    st.markdown(f"### {service['title']}")
 
                     st.write(service["description"])
 
                     st.button(
-                        "ಮುಂದೆ",
+                        t("next"),
                         key=f"service_{service['page']}",
                         use_container_width=True,
                         on_click=navigate_to,

@@ -1,22 +1,40 @@
+from typing import Literal
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    Form,
+    HTTPException,
+)
 
 from backend.integrations.sarvam import (
     transcribe_audio,
-    SarvamAPIError
+    SarvamAPIError,
 )
 
-router = APIRouter(prefix="/voice", tags=["Voice"])
+router = APIRouter(
+    prefix="/voice",
+    tags=["Voice"],
+)
 
 MAX_AUDIO_SIZE = 15 * 1024 * 1024
 
 ALLOWED_EXTENSIONS = {
-    ".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm"
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".ogg",
+    ".flac",
+    ".webm",
 }
 
 
 @router.post("/transcribe")
-async def transcribe(audio: UploadFile = File(...)):
+async def transcribe(
+    audio: UploadFile = File(...),
+    language: Literal["kn", "en"] = Form("kn"),
+):
 
     filename = audio.filename or "recording.wav"
 
@@ -25,7 +43,7 @@ async def transcribe(audio: UploadFile = File(...)):
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported audio format."
+            detail="Unsupported audio format.",
         )
 
     audio_bytes = await audio.read(MAX_AUDIO_SIZE + 1)
@@ -33,29 +51,31 @@ async def transcribe(audio: UploadFile = File(...)):
     if not audio_bytes:
         raise HTTPException(
             status_code=400,
-            detail="No audio was provided."
+            detail="No audio was provided.",
         )
 
     if len(audio_bytes) > MAX_AUDIO_SIZE:
         raise HTTPException(
             status_code=413,
-            detail="Audio file is too large. Maximum size is 15 MB."
+            detail="Audio file is too large. Maximum size is 15 MB.",
         )
 
     try:
         result = transcribe_audio(
             audio_bytes=audio_bytes,
-            filename=filename
+            filename=filename,
+            language=language,
         )
 
         return {
             "success": True,
             "provider": "Sarvam AI",
-            "text": result["text"]
+            "text": result["text"],
+            "language": result.get("language", language),
         }
 
     except SarvamAPIError as error:
         raise HTTPException(
             status_code=502,
-            detail=str(error)
+            detail=str(error),
         )

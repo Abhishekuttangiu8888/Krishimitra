@@ -1,0 +1,549 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <style>
+        body {
+            margin: 0;
+            padding: 8px;
+            font-family: Arial, sans-serif;
+            background: transparent;
+            color: #245b36;
+        }
+
+        .voice-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid #cfe5d3;
+            border-radius: 12px;
+            background: #f5fbf6;
+        }
+
+        .indicator {
+            width: 11px;
+            height: 11px;
+            border-radius: 50%;
+            background: #999;
+            flex-shrink: 0;
+        }
+
+        .indicator.active {
+            background: #16a34a;
+            box-shadow: 0 0 0 5px rgba(22, 163, 74, 0.12);
+        }
+
+        .indicator.processing {
+            background: #e6a23c;
+        }
+
+        #status {
+            font-size: 14px;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="voice-box">
+        <div id="indicator" class="indicator"></div>
+        <div id="status">ಮೈಕ್ರೋಫೋನ್ ಪ್ರಾರಂಭವಾಗುತ್ತಿದೆ...</div>
+    </div>
+
+    <script>
+        const indicator = document.getElementById("indicator");
+        const statusText = document.getElementById("status");
+
+        const translations = {
+            kn: {
+                starting: "ಮೈಕ್ರೋಫೋನ್ ಪ್ರಾರಂಭವಾಗುತ್ತಿದೆ...",
+                unavailable: "ಈ ಬ್ರೌಸರ್‌ನಲ್ಲಿ ಮೈಕ್ರೋಫೋನ್ ಲಭ್ಯವಿಲ್ಲ.",
+                ready: "ಮಾತನಾಡಲು ಸಿದ್ಧವಾಗಿದೆ. ನಿಮ್ಮ ಉತ್ತರವನ್ನು ಹೇಳಿ.",
+                permission: "ಮೈಕ್ರೋಫೋನ್ ಅನುಮತಿ ನೀಡಿ ಮತ್ತು ಪುಟವನ್ನು ಮರುತೆರೆಯಿರಿ.",
+                recordingError: "ರೆಕಾರ್ಡಿಂಗ್ ಪ್ರಾರಂಭಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.",
+                listening: "ನಿಮ್ಮ ಉತ್ತರವನ್ನು ಕೇಳುತ್ತಿದ್ದೇನೆ...",
+                speakAgain: "ಮತ್ತೊಮ್ಮೆ ಮಾತನಾಡಿ.",
+                processing: "ನಿಮ್ಮ ಉತ್ತರವನ್ನು ಪ್ರಕ್ರಿಯೆಗೊಳಿಸಲಾಗುತ್ತಿದೆ...",
+                nextQuestion: "ಮುಂದಿನ ಪ್ರಶ್ನೆಗೆ ಸಿದ್ಧವಾಗುತ್ತಿದೆ...",
+                checking: "ಉತ್ತರವನ್ನು ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ...",
+                audioError: "ಆಡಿಯೋ ಪ್ರಕ್ರಿಯೆಗೊಳಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ. ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
+                hearQuestion: "ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ..."
+            },
+            en: {
+                starting: "Starting microphone...",
+                unavailable: "Microphone is not available in this browser.",
+                ready: "Ready to listen. Please speak your answer.",
+                permission: "Please allow microphone access and reload the page.",
+                recordingError: "Unable to start recording.",
+                listening: "Listening to your answer...",
+                speakAgain: "Please speak again.",
+                processing: "Processing your answer...",
+                nextQuestion: "Getting ready for the next question...",
+                checking: "Checking your answer...",
+                audioError: "Unable to process audio. Please try again.",
+                hearQuestion: "Please listen to the question..."
+            }
+        };
+
+        let language = "kn";
+
+        function tx(key) {
+            return translations[language]?.[key]
+                || translations.kn[key]
+                || key;
+        }
+
+        let listeningEnabled = false;
+        let currentQuestionId = null;
+
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let audioContext = null;
+        let analyser = null;
+        let microphoneSource = null;
+
+        let recordingChunks = [];
+        let recordingStarted = false;
+        let silenceStartedAt = null;
+        let recordingStartedAt = null;
+
+        let animationFrame = null;
+        let lastSubmittedQuestionId = null;
+
+        const SILENCE_THRESHOLD = 0.012;
+        const SILENCE_DURATION = 1600;
+        const MIN_RECORDING_DURATION = 700;
+        const MAX_RECORDING_DURATION = 12000;
+
+        function setStatus(message, state = "idle") {
+            statusText.textContent = message;
+            indicator.className = "indicator";
+
+            if (state === "active") {
+                indicator.classList.add("active");
+            } else if (state === "processing") {
+                indicator.classList.add("processing");
+            }
+        }
+
+        function sendToStreamlit(value) {
+            window.parent.postMessage(
+                {
+                    isStreamlitMessage: true,
+                    type: "streamlit:setComponentValue",
+                    value: value
+                },
+                "*"
+            );
+        }
+
+        function sendReady() {
+            window.parent.postMessage(
+                {
+                    isStreamlitMessage: true,
+                    type: "streamlit:componentReady",
+                    apiVersion: 1
+                },
+                "*"
+            );
+        }
+
+        function setFrameHeight() {
+            window.parent.postMessage(
+                {
+                    isStreamlitMessage: true,
+                    type: "streamlit:setFrameHeight",
+                    height: document.body.scrollHeight + 8
+                },
+                "*"
+            );
+        }
+
+        async function initializeMicrophone() {
+            try {
+                if (
+                    !navigator.mediaDevices ||
+                    !navigator.mediaDevices.getUserMedia
+                ) {
+                    setStatus(tx("unavailable"));
+                    return;
+                }
+
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                audioContext = new (
+                    window.AudioContext ||
+                    window.webkitAudioContext
+                )();
+
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+
+                microphoneSource =
+                    audioContext.createMediaStreamSource(mediaStream);
+
+                microphoneSource.connect(analyser);
+
+                setStatus(tx("ready"), "active");
+
+                if (listeningEnabled) {
+                    startMonitoring();
+                }
+
+            } catch (error) {
+                console.error("Microphone error:", error);
+                setStatus(tx("permission"));
+            }
+        }
+
+        function getAudioLevel() {
+            if (!analyser) {
+                return 0;
+            }
+
+            const samples = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(samples);
+
+            let sum = 0;
+
+            for (let i = 0; i < samples.length; i++) {
+                sum += samples[i] * samples[i];
+            }
+
+            return Math.sqrt(sum / samples.length);
+        }
+
+        function startMonitoring() {
+            if (!listeningEnabled || !analyser) {
+                return;
+            }
+
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+            }
+
+            function monitor() {
+                if (!listeningEnabled) {
+                    return;
+                }
+
+                const level = getAudioLevel();
+                const now = Date.now();
+
+                if (!recordingStarted) {
+                    if (level > SILENCE_THRESHOLD) {
+                        startRecording();
+                    }
+                } else {
+                    if (level > SILENCE_THRESHOLD) {
+                        silenceStartedAt = null;
+                    } else {
+                        if (silenceStartedAt === null) {
+                            silenceStartedAt = now;
+                        }
+
+                        const silenceDuration = now - silenceStartedAt;
+                        const recordingDuration = now - recordingStartedAt;
+
+                        if (
+                            silenceDuration >= SILENCE_DURATION &&
+                            recordingDuration >= MIN_RECORDING_DURATION
+                        ) {
+                            stopRecording();
+                            return;
+                        }
+                    }
+
+                    if (
+                        recordingStartedAt !== null &&
+                        now - recordingStartedAt >= MAX_RECORDING_DURATION
+                    ) {
+                        stopRecording();
+                        return;
+                    }
+                }
+
+                animationFrame = requestAnimationFrame(monitor);
+            }
+
+            animationFrame = requestAnimationFrame(monitor);
+        }
+
+        function startRecording() {
+            if (
+                !mediaStream ||
+                recordingStarted ||
+                !listeningEnabled
+            ) {
+                return;
+            }
+
+            const mimeType = MediaRecorder.isTypeSupported(
+                "audio/webm;codecs=opus"
+            )
+                ? "audio/webm;codecs=opus"
+                : "audio/webm";
+
+            try {
+                mediaRecorder = new MediaRecorder(
+                    mediaStream,
+                    { mimeType: mimeType }
+                );
+            } catch (error) {
+                console.error("MediaRecorder error:", error);
+                setStatus(tx("recordingError"));
+                return;
+            }
+
+            recordingChunks = [];
+            recordingStarted = true;
+            recordingStartedAt = Date.now();
+            silenceStartedAt = null;
+
+            mediaRecorder.ondataavailable = function(event) {
+                if (event.data && event.data.size > 0) {
+                    recordingChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = async function() {
+                await processRecording();
+            };
+
+            mediaRecorder.start();
+
+            setStatus(tx("listening"), "active");
+        }
+
+        function stopRecording() {
+            if (!recordingStarted || !mediaRecorder) {
+                return;
+            }
+
+            recordingStarted = false;
+
+            if (animationFrame) {
+                cancelAnimationFrame(animationFrame);
+                animationFrame = null;
+            }
+
+            if (mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+            }
+        }
+
+        async function processRecording() {
+            try {
+                if (!recordingChunks.length) {
+                    setStatus(tx("speakAgain"), "active");
+
+                    if (listeningEnabled) {
+                        startMonitoring();
+                    }
+
+                    return;
+                }
+
+                setStatus(tx("processing"), "processing");
+
+                const webmBlob = new Blob(
+                    recordingChunks,
+                    { type: "audio/webm" }
+                );
+
+                const arrayBuffer = await webmBlob.arrayBuffer();
+
+                const decodedAudio =
+                    await audioContext.decodeAudioData(arrayBuffer);
+
+                const wavBlob = convertToWav(decodedAudio);
+                const base64Audio = await blobToBase64(wavBlob);
+
+                const questionId = currentQuestionId;
+
+                if (
+                    !questionId ||
+                    questionId === lastSubmittedQuestionId
+                ) {
+                    setStatus(tx("nextQuestion"));
+                    return;
+                }
+
+                lastSubmittedQuestionId = questionId;
+
+                sendToStreamlit({
+                    question_id: questionId,
+                    audio_base64: base64Audio,
+                    sequence: Date.now()
+                });
+
+                setStatus(tx("checking"), "processing");
+
+            } catch (error) {
+                console.error("Audio processing error:", error);
+
+                setStatus(tx("audioError"));
+                lastSubmittedQuestionId = null;
+
+                if (listeningEnabled) {
+                    startMonitoring();
+                }
+            }
+        }
+
+        function convertToWav(audioBuffer) {
+            const numberOfChannels = 1;
+            const sampleRate = audioBuffer.sampleRate;
+            const samples = audioBuffer.getChannelData(0);
+
+            const bytesPerSample = 2;
+            const blockAlign = numberOfChannels * bytesPerSample;
+            const dataSize = samples.length * bytesPerSample;
+
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+
+            function writeString(offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+
+            writeString(0, "RIFF");
+            view.setUint32(4, 36 + dataSize, true);
+            writeString(8, "WAVE");
+            writeString(12, "fmt ");
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, numberOfChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * blockAlign, true);
+            view.setUint16(32, blockAlign, true);
+            view.setUint16(34, 16, true);
+            writeString(36, "data");
+            view.setUint32(40, dataSize, true);
+
+            let offset = 44;
+
+            for (let i = 0; i < samples.length; i++) {
+                let sample = Math.max(-1, Math.min(1, samples[i]));
+
+                sample = sample < 0
+                    ? sample * 0x8000
+                    : sample * 0x7FFF;
+
+                view.setInt16(offset, sample, true);
+                offset += 2;
+            }
+
+            return new Blob(
+                [buffer],
+                { type: "audio/wav" }
+            );
+        }
+
+        function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+
+                reader.onloadend = function() {
+                    const result = reader.result;
+                    const base64 = result.split(",")[1];
+                    resolve(base64);
+                };
+
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        async function updateSettings(args) {
+            const newQuestionId = args.question_id || null;
+            const newListeningEnabled =
+                Boolean(args.listening_enabled);
+
+            const newLanguage = args.language === "en" ? "en" : "kn";
+            const languageChanged = newLanguage !== language;
+
+            language = newLanguage;
+
+            const questionChanged =
+                newQuestionId !== currentQuestionId;
+
+            const listeningChanged =
+                newListeningEnabled !== listeningEnabled;
+
+            currentQuestionId = newQuestionId;
+
+            if (!newListeningEnabled) {
+                listeningEnabled = false;
+
+                if (animationFrame) {
+                    cancelAnimationFrame(animationFrame);
+                    animationFrame = null;
+                }
+
+                if (recordingStarted) {
+                    recordingStarted = false;
+
+                    if (
+                        mediaRecorder &&
+                        mediaRecorder.state !== "inactive"
+                    ) {
+                        mediaRecorder.stop();
+                    }
+                }
+
+                setStatus(tx("hearQuestion"));
+                return;
+            }
+
+            listeningEnabled = true;
+
+            if (questionChanged) {
+                lastSubmittedQuestionId = null;
+            }
+
+            if (
+                listeningChanged ||
+                questionChanged ||
+                languageChanged
+            ) {
+                if (
+                    audioContext &&
+                    audioContext.state === "suspended"
+                ) {
+                    await audioContext.resume();
+                }
+
+                setStatus(tx("ready"), "active");
+                startMonitoring();
+            }
+        }
+
+        window.addEventListener("message", async function(event) {
+            const message = event.data;
+
+            if (!message || message.type !== "streamlit:render") {
+                return;
+            }
+
+            await updateSettings(message.args || {});
+        });
+
+        sendReady();
+        setFrameHeight();
+        initializeMicrophone();
+    </script>
+</body>
+</html>

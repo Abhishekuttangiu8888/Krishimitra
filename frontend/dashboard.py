@@ -8,6 +8,10 @@ from frontend.voice_interface import render_voice_interface
 
 def render_dashboard():
 
+    # --------------------------------------------------
+    # FLOATING CHATBOT STYLING
+    # --------------------------------------------------
+
     st.markdown(
         """
         <style>
@@ -74,21 +78,37 @@ def render_dashboard():
         unsafe_allow_html=True,
     )
 
+    # --------------------------------------------------
+    # WELCOME SECTION
+    # --------------------------------------------------
+
     st.markdown(
         f"""
         <div class="km-welcome">
             <h2>{t("welcome")}</h2>
-            <p>{t("welcome_message")}</p>
+            <p>{t("dashboard_description")}</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    # --------------------------------------------------
+    # SERVICE CARDS
+    # --------------------------------------------------
+
     render_service_cards()
 
+    # --------------------------------------------------
+    # FOOTER
+    # --------------------------------------------------
+
     st.markdown(
-        f'<div class="km-footer">{t("app_name")} · {t("tagline")}</div>',
+        f'<div class="km-footer">{t("app_name")} · {t("app_tagline")}</div>',
         unsafe_allow_html=True,
     )
+
+    # --------------------------------------------------
+    # VOICE ASSISTANT
+    # --------------------------------------------------
 
     render_voice_interface()
