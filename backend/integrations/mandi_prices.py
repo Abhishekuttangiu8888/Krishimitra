@@ -7,14 +7,15 @@ from typing import Optional
 
 AGMARKNET_API_BASE = "https://api.agmarknet.gov.in/v1"
 
-FILTERS_URL = f"{AGMARKNET_API_BASE}/daily-price-arrival/filters"
+FILTERS_URL = (
+    f"{AGMARKNET_API_BASE}/daily-price-arrival/filters"
+)
 
 COMMODITY_PRICE_URL = (
     f"{AGMARKNET_API_BASE}/prices-and-arrivals/commodity-price/lastweek"
 )
 
 KARNATAKA_STATE_ID = 16
-
 REQUEST_TIMEOUT = (5, 15)
 
 
@@ -41,8 +42,6 @@ def _create_session():
 
 @lru_cache(maxsize=1)
 def _fetch_filter_data():
-    """Fetch and cache the original AGMARKNET filter response."""
-
     session = _create_session()
 
     try:
@@ -95,8 +94,6 @@ def _fetch_filter_data():
 
 @lru_cache(maxsize=1)
 def _build_mandi_filters():
-    """Build and cache the processed Karnataka filters."""
-
     data = _fetch_filter_data()
 
     karnataka_districts = [
@@ -165,8 +162,6 @@ def _build_mandi_filters():
         "districts": districts,
         "markets": markets,
         "commodities": commodities,
-
-        # Internal lookup dictionaries for fast validation.
         "_district_lookup": {
             item["id"]: item["name"]
             for item in districts
@@ -183,20 +178,12 @@ def _build_mandi_filters():
 
 
 def get_mandi_filters(refresh=False):
-    """
-    Return Karnataka districts, markets and commodities.
-
-    The first call fetches AGMARKNET filters.
-    Subsequent calls use cached processed data.
-    """
-
     if refresh:
         _build_mandi_filters.cache_clear()
         _fetch_filter_data.cache_clear()
 
     cached = _build_mandi_filters()
 
-    # Do not expose internal lookup dictionaries to the frontend.
     return {
         "states": cached["states"],
         "districts": cached["districts"],
@@ -218,15 +205,6 @@ def get_mandi_prices(
     commodity_id: int,
     date: Optional[date] = None,
 ):
-    """
-    Fetch the available last-week prices for a Karnataka market
-    and commodity.
-
-    AGMARKNET's lastweek endpoint does not accept a selected
-    historical date. The date is retained for API compatibility
-    and returned as metadata.
-    """
-
     filters = _build_mandi_filters()
 
     market = filters["_market_lookup"].get(market_id)
@@ -259,7 +237,6 @@ def get_mandi_prices(
         )
 
         response.raise_for_status()
-
         payload = response.json()
 
         if not isinstance(payload, dict):

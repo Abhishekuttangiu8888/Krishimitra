@@ -13,7 +13,7 @@ FILTERS_URL = f"{API_BASE_URL}/mandi/filters"
 PRICES_URL = f"{API_BASE_URL}/mandi/prices"
 
 REQUEST_TIMEOUT = (4, 12)
-MAX_WORKERS = 6
+MAX_WORKERS = 2
 
 PRIORITY_COMMODITIES = [
     "Paddy", "Rice", "Ragi", "Maize", "Jowar",
@@ -162,6 +162,7 @@ def fetch_filters():
         FILTERS_URL,
         timeout=REQUEST_TIMEOUT,
     )
+
     response.raise_for_status()
 
     payload = response.json()
@@ -170,25 +171,33 @@ def fetch_filters():
         raise ValueError("Invalid filters response.")
 
     if not payload.get("success", True):
-        raise ValueError(payload.get("message", "Unable to load filters."))
+        raise ValueError(
+            payload.get("message", "Unable to load filters.")
+        )
 
     data = payload.get("data", payload)
 
-    required = ("districts", "markets", "commodities")
-
-    for key in required:
+    for key in ("districts", "markets", "commodities"):
         if not isinstance(data.get(key), list):
             raise ValueError(f"Invalid filter data: {key}")
 
     return data
 
 
-def fetch_prices(district_id, market_id, commodity_id, selected_date):
+def fetch_prices(
+    district_id,
+    market_id,
+    commodity_id,
+    selected_date,
+):
     payload = {
         "district_id": int(district_id),
         "market_id": int(market_id),
         "commodity_id": int(commodity_id),
-        "date": selected_date.isoformat(),
+
+        # IMPORTANT:
+        # Backend expects selected_date, not date.
+        "selected_date": selected_date.isoformat(),
     }
 
     response = requests.post(
@@ -196,6 +205,16 @@ def fetch_prices(district_id, market_id, commodity_id, selected_date):
         json=payload,
         timeout=REQUEST_TIMEOUT,
     )
+
+    if response.status_code == 422:
+        try:
+            details = response.json()
+        except ValueError:
+            details = response.text
+
+        raise ValueError(
+            f"Backend validation error (422): {details}"
+        )
 
     response.raise_for_status()
 
@@ -205,9 +224,16 @@ def fetch_prices(district_id, market_id, commodity_id, selected_date):
         raise ValueError("Invalid price response.")
 
     if not result.get("success", True):
-        raise ValueError(result.get("message", "Unable to fetch prices."))
+        raise ValueError(
+            result.get("message", "Unable to fetch prices.")
+        )
 
-    return result.get("data", result)
+    data = result.get("data", result)
+
+    if not isinstance(data, dict):
+        raise ValueError("Invalid mandi price data.")
+
+    return data
 
 
 def _check_one_commodity(
@@ -223,63 +249,71 @@ def _check_one_commodity(
             date.today(),
         )
 
-        if result.get("has_report"):
-            return commodity
+        return {
+            "commodity": (
+                commodity
+                if result.get("has_report")
+                else None
+            ),
+            "error": None,
+        }
 
-    except Exception:
-        # A failed commodity request should not stop other checks.
-        return None
+    except Exception as error:
+        return {
+            "commodity": None,
+            "error": str(error),
+        }
 
-    return None
 
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_market_reported_crops(district_id, market_id, commodities):
-    """
-    Check commodities concurrently and return only crops
-    with reported prices in the selected market.
-    """
-
-    priority = {
+@st.cache_data(ttl=300, show_spinner=False)
+def get_market_reported_crops(
+    district_id,
+    market_id,
+    commodities,
+):
+    priority_names = {
         name.lower()
         for name in PRIORITY_COMMODITIES
     }
 
-    selected_commodities = sorted(
-        commodities,
-        key=lambda item: (
-            item.get("name", "").lower() not in priority,
-            item.get("name", "").lower(),
-        ),
-    )
+    selected_commodities = [
+        item
+        for item in commodities
+        if item.get("name", "").strip().lower()
+        in priority_names
+    ]
 
     available = []
+    errors = []
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
+    with ThreadPoolExecutor(
+        max_workers=MAX_WORKERS
+    ) as executor:
+
+        futures = [
             executor.submit(
                 _check_one_commodity,
-                district_id,
-                market_id,
+                int(district_id),
+                int(market_id),
                 commodity,
-            ): commodity
+            )
             for commodity in selected_commodities
-        }
+        ]
 
         for future in as_completed(futures):
-            try:
-                commodity = future.result()
+            result = future.result()
 
-                if commodity:
-                    available.append(commodity)
+            if result["commodity"]:
+                available.append(result["commodity"])
 
-            except Exception:
-                continue
+            if result["error"]:
+                errors.append(result["error"])
 
-    return sorted(
-        available,
-        key=lambda item: item.get("name", "").lower(),
+    available.sort(
+        key=lambda item: item.get("name", "").lower()
     )
+
+    return available, errors
 
 
 def render_price_result(result):
@@ -288,10 +322,14 @@ def render_price_result(result):
         return
 
     if not result.get("has_report"):
-        st.info(result.get("message", tx("no_data")))
+        st.info(
+            result.get("message", tx("no_data"))
+        )
         return
 
-    st.success(result.get("message", tx("latest")))
+    st.success(
+        result.get("message", tx("latest"))
+    )
 
     st.caption(
         f"{result.get('district', '')} • "
@@ -303,9 +341,13 @@ def render_price_result(result):
 
     for record in result.get("records", []):
         for daily in record.get("daily_prices", []):
+
             if daily.get("price") is not None:
                 rows.append({
-                    tx("variety"): record.get("variety", "Unknown"),
+                    tx("variety"): record.get(
+                        "variety",
+                        "Unknown",
+                    ),
                     tx("reported_date"): daily.get("date"),
                     tx("price"): daily.get("price"),
                     tx("unit"): record.get("unit", "NR"),
@@ -326,8 +368,16 @@ def render_price_result(result):
         errors="coerce",
     )
 
+    chart_df[tx("price")] = pd.to_numeric(
+        chart_df[tx("price")],
+        errors="coerce",
+    )
+
     chart_df = chart_df.dropna(
-        subset=[tx("reported_date"), tx("price")]
+        subset=[
+            tx("reported_date"),
+            tx("price"),
+        ]
     )
 
     if not chart_df.empty:
@@ -341,6 +391,7 @@ def render_price_result(result):
         st.line_chart(chart_data)
 
     st.subheader(tx("price_table"))
+
     st.dataframe(
         df,
         use_container_width=True,
@@ -348,9 +399,16 @@ def render_price_result(result):
     )
 
     st.caption(
-        f"{tx('source')}: {result.get('source', 'AGMARKNET')}"
+        f"{tx('source')}: "
+        f"{result.get('source', 'AGMARKNET')}"
     )
-    st.caption(result.get("report_period", tx("period")))
+
+    st.caption(
+        result.get(
+            "report_period",
+            tx("period"),
+        )
+    )
 
 
 def render_mandi_page():
@@ -360,11 +418,16 @@ def render_mandi_page():
     with st.spinner(tx("loading")):
         try:
             filters = fetch_filters()
+
         except Exception as error:
-            st.error(f"{tx('error')} {error}")
+            st.error(
+                f"{tx('error')} {error}"
+            )
+
             if st.button(tx("refresh")):
                 fetch_filters.clear()
                 st.rerun()
+
             return
 
     districts = filters["districts"]
@@ -376,7 +439,10 @@ def render_mandi_page():
         return
 
     district_options = {
-        display_name(item["name"], DISTRICT_TRANSLATIONS): item["id"]
+        display_name(
+            item["name"],
+            DISTRICT_TRANSLATIONS,
+        ): item["id"]
         for item in districts
     }
 
@@ -391,7 +457,8 @@ def render_mandi_page():
     district_markets = [
         item
         for item in markets
-        if item.get("district_id") == district_id
+        if int(item.get("district_id", 0))
+        == int(district_id)
     ]
 
     if not district_markets:
@@ -416,27 +483,70 @@ def render_mandi_page():
         int(market_id),
     )
 
-    if st.session_state.get("mandi_crop_cache_key") != crop_cache_key:
-        st.session_state.pop("mandi_selected_crop", None)
-        st.session_state["mandi_crop_cache_key"] = crop_cache_key
+    if (
+        st.session_state.get("mandi_crop_cache_key")
+        != crop_cache_key
+    ):
+        st.session_state.pop(
+            "mandi_selected_crop",
+            None,
+        )
+
+        st.session_state["mandi_crop_cache_key"] = (
+            crop_cache_key
+        )
 
     with st.spinner(tx("checking")):
         try:
-            available_crops = get_market_reported_crops(
+            (
+                available_crops,
+                discovery_errors,
+            ) = get_market_reported_crops(
                 int(district_id),
                 int(market_id),
                 commodities,
             )
+
         except Exception as error:
-            st.error(f"{tx('error')} {error}")
+            st.error(
+                f"{tx('error')} {error}"
+            )
             return
+
+    if discovery_errors and not available_crops:
+        st.error(
+            "AGMARKNET could not be checked successfully. "
+            "Please try refreshing the information."
+        )
+
+        with st.expander("Technical details"):
+            for error in discovery_errors[:5]:
+                st.write(error)
+
+        return
 
     if not available_crops:
         st.info(tx("no_crop"))
+
+        if discovery_errors:
+            st.warning(
+                "Some commodity requests failed. "
+                "The available crop list may be incomplete."
+            )
+
         return
 
+    if discovery_errors:
+        st.warning(
+            "Some commodity requests failed. "
+            "The crop list may be incomplete."
+        )
+
     crop_options = {
-        display_name(item["name"], CROP_TRANSLATIONS): item["id"]
+        display_name(
+            item["name"],
+            CROP_TRANSLATIONS,
+        ): item["id"]
         for item in available_crops
     }
 
@@ -456,7 +566,11 @@ def render_mandi_page():
         key="mandi_selected_date",
     )
 
-    if st.button(tx("fetch"), type="primary", use_container_width=True):
+    if st.button(
+        tx("fetch"),
+        type="primary",
+        use_container_width=True,
+    ):
         try:
             with st.spinner(tx("fetching")):
                 result = fetch_prices(
@@ -469,16 +583,27 @@ def render_mandi_page():
             render_price_result(result)
 
         except requests.Timeout:
-            st.error("Request timed out. Please try again.")
+            st.error(
+                "Request timed out. Please try again."
+            )
 
         except requests.RequestException as error:
-            st.error(f"{tx('error')} {error}")
+            st.error(
+                f"{tx('error')} {error}"
+            )
 
         except Exception as error:
-            st.error(f"{tx('error')} {error}")
+            st.error(
+                f"{tx('error')} {error}"
+            )
 
     if st.button(tx("refresh")):
         fetch_filters.clear()
         get_market_reported_crops.clear()
-        st.session_state.pop("mandi_crop_cache_key", None)
+
+        st.session_state.pop(
+            "mandi_crop_cache_key",
+            None,
+        )
+
         st.rerun()
