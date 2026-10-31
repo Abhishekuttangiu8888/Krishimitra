@@ -1,666 +1,392 @@
 
 import requests
 import streamlit as st
+import pandas as pd
 
 from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 API_BASE_URL = "http://127.0.0.1:8000/api/agriculture"
 
+FILTERS_URL = f"{API_BASE_URL}/mandi/filters"
+PRICES_URL = f"{API_BASE_URL}/mandi/prices"
 
-# =========================================================
-# LANGUAGE TEXT
-# =========================================================
+REQUEST_TIMEOUT = (4, 12)
+MAX_WORKERS = 6
+
+PRIORITY_COMMODITIES = [
+    "Paddy", "Rice", "Ragi", "Maize", "Jowar",
+    "Bajra", "Tur", "Red Gram", "Groundnut",
+    "Cotton", "Sugarcane", "Onion", "Potato",
+    "Tomato", "Chilli", "Turmeric", "Soyabean",
+    "Arecanut", "Coconut", "Sunflower", "Wheat",
+]
 
 TEXT = {
     "kn": {
-        "title": "🌾 ಕೃಷಿ ಮಾರುಕಟ್ಟೆ ಬೆಲೆಗಳು",
-        "subtitle": "ನಿಮ್ಮ ಆಯ್ಕೆಯ ಮಾರುಕಟ್ಟೆಯಲ್ಲಿ ವರದಿಯಾದ ಬೆಲೆಗಳನ್ನು ಪರಿಶೀಲಿಸಿ.",
+        "title": "ಮಾರುಕಟ್ಟೆ ಬೆಲೆಗಳು",
+        "subtitle": "ನಿಮ್ಮ ಜಿಲ್ಲೆಯ ಮಾರುಕಟ್ಟೆಯ ಬೆಲೆಗಳನ್ನು ಪರಿಶೀಲಿಸಿ",
         "district": "ಜಿಲ್ಲೆ ಆಯ್ಕೆಮಾಡಿ",
-        "market": "APMC ಮಾರುಕಟ್ಟೆ ಆಯ್ಕೆಮಾಡಿ",
-        "crop": "ಬೆಳೆ / ಕೃಷಿ ಉತ್ಪನ್ನ ಆಯ್ಕೆಮಾಡಿ",
-        "date": "ಉಲ್ಲೇಖ ದಿನಾಂಕ",
-        "search": "🔍 ಮಾರುಕಟ್ಟೆ ಬೆಲೆ ಪರಿಶೀಲಿಸಿ",
-        "loading_filters": "ಮಾರುಕಟ್ಟೆ ಮಾಹಿತಿಯನ್ನು ಪಡೆಯಲಾಗುತ್ತಿದೆ...",
-        "loading_crops": "ಈ ಮಾರುಕಟ್ಟೆಯಲ್ಲಿ ಲಭ್ಯವಿರುವ ಬೆಳೆಗಳನ್ನು ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ...",
-        "loading_prices": "ಬೆಲೆ ಮಾಹಿತಿಯನ್ನು ಪಡೆಯಲಾಗುತ್ತಿದೆ...",
-        "no_markets": "ಈ ಜಿಲ್ಲೆಗೆ ಮಾರುಕಟ್ಟೆಗಳು ಲಭ್ಯವಿಲ್ಲ.",
-        "no_crops": "ಈ ಮಾರುಕಟ್ಟೆಯಲ್ಲಿ ವರದಿಯಾದ ಬೆಳೆಗಳು ಲಭ್ಯವಿಲ್ಲ.",
-        "no_price": "ಈ ಆಯ್ಕೆಗೆ ಬೆಲೆ ವರದಿ ಲಭ್ಯವಿಲ್ಲ.",
-        "error": "ಮಾರುಕಟ್ಟೆ ಸೇವೆಯೊಂದಿಗೆ ಸಂಪರ್ಕಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.",
-        "latest": "ಇತ್ತೀಚಿನ ವರದಿಯಾದ ಬೆಲೆ",
-        "date_col": "ದಿನಾಂಕ",
+        "market": "ಮಾರುಕಟ್ಟೆ / ಎಪಿಎಂಸಿ ಆಯ್ಕೆಮಾಡಿ",
+        "crop": "ಬೆಳೆ ಆಯ್ಕೆಮಾಡಿ",
+        "date": "ದಿನಾಂಕ ಆಯ್ಕೆಮಾಡಿ",
+        "loading": "ಮಾಹಿತಿ ಲೋಡ್ ಆಗುತ್ತಿದೆ...",
+        "checking": "ಈ ಮಾರುಕಟ್ಟೆಯಲ್ಲಿ ಲಭ್ಯವಿರುವ ಬೆಳೆಗಳನ್ನು ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ...",
+        "no_district": "ಜಿಲ್ಲೆಗಳು ಲಭ್ಯವಿಲ್ಲ.",
+        "no_market": "ಈ ಜಿಲ್ಲೆಯಲ್ಲಿ ಮಾರುಕಟ್ಟೆಗಳು ಲಭ್ಯವಿಲ್ಲ.",
+        "no_crop": "ಈ ಮಾರುಕಟ್ಟೆಗೆ ವರದಿಯಾದ ಬೆಳೆ ಬೆಲೆಗಳು ಲಭ್ಯವಿಲ್ಲ.",
+        "select_crop": "ಬೆಳೆ ಆಯ್ಕೆಮಾಡಿ.",
+        "fetch": "ಬೆಲೆಗಳನ್ನು ಪಡೆಯಿರಿ",
+        "fetching": "ಬೆಲೆಗಳನ್ನು ಪಡೆಯಲಾಗುತ್ತಿದೆ...",
+        "error": "ಮಾಹಿತಿ ಪಡೆಯಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.",
+        "no_data": "ಆಯ್ಕೆ ಮಾಡಿದ ಬೆಳೆಗೆ ಬೆಲೆ ಮಾಹಿತಿ ಲಭ್ಯವಿಲ್ಲ.",
+        "latest": "ಇತ್ತೀಚಿನ ಬೆಲೆ",
+        "variety": "ತಳಿ",
+        "unit": "ಘಟಕ",
+        "reported_date": "ವರದಿಯಾದ ದಿನಾಂಕ",
         "price": "ಬೆಲೆ",
-        "status": "ವರದಿ ಸ್ಥಿತಿ",
-        "reported": "ವರದಿಯಾಗಿದೆ",
-        "not_reported": "ವರದಿ ಇಲ್ಲ",
-        "source": "ಮೂಲ: AGMARKNET",
-        "disclaimer": "AGMARKNET ನಲ್ಲಿ ವರದಿಯಾದ ಬೆಲೆಗಳನ್ನು ಮಾತ್ರ ತೋರಿಸಲಾಗುತ್ತದೆ.",
-        "reference": "ಇತ್ತೀಚಿನ ಲಭ್ಯವಿರುವ 7 ದಿನಗಳ ವರದಿಗಳನ್ನು ತೋರಿಸಲಾಗುತ್ತದೆ.",
-        "limited": "ಸದ್ಯಕ್ಕೆ ಸಾಮಾನ್ಯ ಬೆಳೆಗಳ ಪಟ್ಟಿಯನ್ನು ಮಾತ್ರ ಪರಿಶೀಲಿಸಲಾಗಿದೆ.",
+        "price_chart": "ಬೆಲೆ ಚಾರ್ಟ್",
+        "price_table": "ಬೆಲೆ ವಿವರಗಳು",
+        "source": "ಮೂಲ",
+        "refresh": "ಮಾಹಿತಿ ಮರುಲೋಡ್ ಮಾಡಿ",
+        "period": "ಲಭ್ಯವಿರುವ ಕಳೆದ 7 ದಿನಗಳ ಮಾಹಿತಿ",
+        "select_all": "ಮೊದಲು ಜಿಲ್ಲೆ ಮತ್ತು ಮಾರುಕಟ್ಟೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ.",
     },
     "en": {
-        "title": "🌾 Agricultural Mandi Prices",
-        "subtitle": "Check reported agricultural prices in your selected market.",
-        "district": "Select district",
-        "market": "Select APMC market",
-        "crop": "Select crop / commodity",
-        "date": "Reference date",
-        "search": "🔍 Check mandi prices",
-        "loading_filters": "Loading market information...",
-        "loading_crops": "Checking crops reported in this market...",
-        "loading_prices": "Fetching market prices...",
-        "no_markets": "No markets are available for this district.",
-        "no_crops": "No reported crops were found for this market.",
-        "no_price": "No price report is available for this selection.",
-        "error": "Could not connect to the mandi service.",
-        "latest": "Latest reported price",
-        "date_col": "Date",
+        "title": "Mandi Market Prices",
+        "subtitle": "Check crop prices in your district's markets",
+        "district": "Select District",
+        "market": "Select Market / APMC",
+        "crop": "Select Crop",
+        "date": "Select Date",
+        "loading": "Loading information...",
+        "checking": "Checking crops reported in this market...",
+        "no_district": "No districts available.",
+        "no_market": "No markets available in this district.",
+        "no_crop": "No reported crop prices are available for this market.",
+        "select_crop": "Please select a crop.",
+        "fetch": "Get Prices",
+        "fetching": "Fetching prices...",
+        "error": "Unable to retrieve information.",
+        "no_data": "No price information is available for this crop.",
+        "latest": "Latest Price",
+        "variety": "Variety",
+        "unit": "Unit",
+        "reported_date": "Reported Date",
         "price": "Price",
-        "status": "Report status",
-        "reported": "Reported",
-        "not_reported": "No report",
-        "source": "Source: AGMARKNET",
-        "disclaimer": "Only prices reported by AGMARKNET are displayed.",
-        "reference": "The latest seven available reporting days are displayed.",
-        "limited": "Currently, only a shortlist of common crops is checked.",
+        "price_chart": "Price Chart",
+        "price_table": "Price Details",
+        "source": "Source",
+        "refresh": "Refresh Information",
+        "period": "Available data from the last 7 days",
+        "select_all": "Please select a district and market first.",
     },
 }
 
-
-# =========================================================
-# KANNADA TRANSLATIONS
-# =========================================================
-
-KANNADA_DISTRICTS = {
-    "Bagalkot": "ಬಾಗಲಕೋಟೆ",
-    "Ballari": "ಬಳ್ಳಾರಿ",
-    "Belagavi": "ಬೆಳಗಾವಿ",
-    "Bengaluru": "ಬೆಂಗಳೂರು",
-    "Bengaluru Rural": "ಬೆಂಗಳೂರು ಗ್ರಾಮಾಂತರ",
-    "Bidar": "ಬೀದರ್",
-    "Chamarajanagar": "ಚಾಮರಾಜನಗರ",
-    "Chikkaballapur": "ಚಿಕ್ಕಬಳ್ಳಾಪುರ",
-    "Chikkamagaluru": "ಚಿಕ್ಕಮಗಳೂರು",
-    "Chitradurga": "ಚಿತ್ರದುರ್ಗ",
-    "Dakshina Kannada": "ದಕ್ಷಿಣ ಕನ್ನಡ",
-    "Davanagere": "ದಾವಣಗೆರೆ",
-    "Dharwad": "ಧಾರವಾಡ",
-    "Gadag": "ಗದಗ",
-    "Hassan": "ಹಾಸನ",
-    "Haveri": "ಹಾವೇರಿ",
-    "Kalaburagi": "ಕಲಬುರಗಿ",
-    "Kodagu": "ಕೊಡಗು",
-    "Kolar": "ಕೋಲಾರ",
-    "Koppal": "ಕೊಪ್ಪಳ",
-    "Mandya": "ಮಂಡ್ಯ",
-    "Mysuru": "ಮೈಸೂರು",
-    "Raichur": "ರಾಯಚೂರು",
-    "Ramanagara": "ರಾಮನಗರ",
-    "Ramanagar": "ರಾಮನಗರ",
-    "Shivamogga": "ಶಿವಮೊಗ್ಗ",
-    "Tumakuru": "ತುಮಕೂರು",
-    "Udupi": "ಉಡುಪಿ",
-    "Uttara Kannada": "ಉತ್ತರ ಕನ್ನಡ",
-    "Vijayapura": "ವಿಜಯಪುರ",
-    "Vijayanagara": "ವಿಜಯನಗರ",
-    "Yadgir": "ಯಾದಗಿರಿ",
+DISTRICT_TRANSLATIONS = {
+    "ಬೆಳಗಾವಿ": "Belagavi",
+    "ಬೆಂಗಳೂರು ನಗರ": "Bengaluru Urban",
+    "ಬೆಂಗಳೂರು ಗ್ರಾಮಾಂತರ": "Bengaluru Rural",
+    "ಬಾಗಲಕೋಟೆ": "Bagalkot",
+    "ಬಳ್ಳಾರಿ": "Ballari",
+    "ಬೀದರ್": "Bidar",
+    "ವಿಜಯಪುರ": "Vijayapura",
+    "ಚಿಕ್ಕಮಗಳೂರು": "Chikkamagaluru",
+    "ಚಿತ್ರದುರ್ಗ": "Chitradurga",
+    "ದಕ್ಷಿಣ ಕನ್ನಡ": "Dakshina Kannada",
+    "ಧಾರವಾಡ": "Dharwad",
+    "ಗದಗ": "Gadag",
+    "ಹಾಸನ": "Hassan",
+    "ಹಾವೇರಿ": "Haveri",
+    "ಕಲಬುರಗಿ": "Kalaburagi",
+    "ಕೊಡಗು": "Kodagu",
+    "ಕೋಲಾರ": "Kolar",
+    "ಕೊಪ್ಪಳ": "Koppal",
+    "ಮಂಡ್ಯ": "Mandya",
+    "ಮೈಸೂರು": "Mysuru",
+    "ರಾಯಚೂರು": "Raichur",
+    "ರಾಮನಗರ": "Ramanagara",
+    "ಶಿವಮೊಗ್ಗ": "Shivamogga",
+    "ತುಮಕೂರು": "Tumakuru",
+    "ಉಡುಪಿ": "Udupi",
+    "ಉತ್ತರ ಕನ್ನಡ": "Uttara Kannada",
+    "ಯಾದಗಿರಿ": "Yadgir",
+    "ಚಿಕ್ಕಬಳ್ಳಾಪುರ": "Chikkaballapura",
+    "ವಿಜಯನಗರ": "Vijayanagara",
 }
 
-
-KANNADA_CROPS = {
-    "Paddy": "ಭತ್ತ",
-    "Paddy(Common)": "ಸಾಮಾನ್ಯ ಭತ್ತ",
-    "Rice": "ಅಕ್ಕಿ",
-    "Maize": "ಮೆಕ್ಕೆಜೋಳ",
-    "Ragi": "ರಾಗಿ",
-    "Ragi(Finger Millet)": "ರಾಗಿ",
-    "Jowar": "ಜೋಳ",
-    "Jowar(Sorghum)": "ಜೋಳ",
-    "Bajra": "ಸಜ್ಜೆ",
-    "Wheat": "ಗೋಧಿ",
-    "Groundnut": "ನೆಲಗಡಲೆ",
-    "Sunflower": "ಸೂರ್ಯಕಾಂತಿ",
-    "Cotton": "ಹತ್ತಿ",
-    "Sugarcane": "ಕಬ್ಬು",
-    "Tur": "ತೊಗರಿ",
-    "Red Gram": "ತೊಗರಿ",
-    "Green Gram": "ಹೆಸರುಕಾಳು",
-    "Black Gram": "ಉದ್ದಿನಕಾಳು",
-    "Bengal Gram": "ಕಡಲೆ",
-    "Chilli": "ಮೆಣಸಿನಕಾಯಿ",
-    "Dry Chilli": "ಒಣ ಮೆಣಸಿನಕಾಯಿ",
-    "Onion": "ಈರುಳ್ಳಿ",
-    "Tomato": "ಟೊಮೆಟೊ",
-    "Potato": "ಆಲೂಗಡ್ಡೆ",
-    "Coconut": "ತೆಂಗಿನಕಾಯಿ",
-    "Arecanut": "ಅಡಿಕೆ",
-    "Arecanut(Betelnut/Supari)": "ಅಡಿಕೆ",
-    "Turmeric": "ಅರಿಶಿನ",
-    "Ginger": "ಶುಂಠಿ",
-    "Garlic": "ಬೆಳ್ಳುಳ್ಳಿ",
-    "Cabbage": "ಎಲೆಕೋಸು",
-    "Cauliflower": "ಹೂಕೋಸು",
-    "Brinjal": "ಬದನೆಕಾಯಿ",
-    "Beans": "ಬೀನ್ಸ್",
-    "Carrot": "ಕ್ಯಾರೆಟ್",
-    "Drumstick": "ನುಗ್ಗೆಕಾಯಿ",
-    "Mango": "ಮಾವು",
-    "Banana": "ಬಾಳೆಹಣ್ಣು",
-    "Papaya": "ಪಪ್ಪಾಯಿ",
-    "Lemon": "ನಿಂಬೆಹಣ್ಣು",
-    "Chana": "ಕಡಲೆ",
-    "Soyabean": "ಸೋಯಾಬೀನ್",
-    "Mustard": "ಸಾಸಿವೆ",
-    "Sesamum": "ಎಳ್ಳು",
-    "Castor Seed": "ಹರಳು",
+CROP_TRANSLATIONS = {
+    "ಭತ್ತ": "Paddy",
+    "ಅಕ್ಕಿ": "Rice",
+    "ರಾಗಿ": "Ragi",
+    "ಮೆಕ್ಕೆಜೋಳ": "Maize",
+    "ಜೋಳ": "Jowar",
+    "ಸಜ್ಜೆ": "Bajra",
+    "ತೊಗರಿ": "Tur",
+    "ತೊಗರಿಬೇಳೆ": "Red Gram",
+    "ಶೇಂಗಾ": "Groundnut",
+    "ಹತ್ತಿ": "Cotton",
+    "ಕಬ್ಬು": "Sugarcane",
+    "ಈರುಳ್ಳಿ": "Onion",
+    "ಆಲೂಗಡ್ಡೆ": "Potato",
+    "ಟೊಮೇಟೊ": "Tomato",
+    "ಮೆಣಸಿನಕಾಯಿ": "Chilli",
+    "ಅರಿಶಿನ": "Turmeric",
+    "ಸೋಯಾಬೀನ್": "Soyabean",
+    "ಅಡಿಕೆ": "Arecanut",
+    "ತೆಂಗಿನಕಾಯಿ": "Coconut",
+    "ಸೂರ್ಯಕಾಂತಿ": "Sunflower",
+    "ಗೋಧಿ": "Wheat",
 }
 
-
-# =========================================================
-# TEMPORARY COMMODITY CHECK LIMIT
-# =========================================================
-
-# This is a shortlist, NOT a complete list of market crops.
-PRIORITY_COMMODITY_IDS = {
-    2,    # Paddy
-    4,    # Maize
-    5,    # Jowar
-    23,   # Onion
-    24,   # Potato
-    30,   # Ragi
-    35,   # Turmeric
-    65,   # Tomato
-    116,  # Coconut
-    118,  # Arecanut
-}
-
-
-# =========================================================
-# LANGUAGE HELPERS
-# =========================================================
 
 def get_language():
-    keys = [
-        "language",
-        "selected_language",
-        "app_language",
-        "ui_language",
-        "locale",
-    ]
-
-    for key in keys:
-        value = st.session_state.get(key)
-
-        if not isinstance(value, str):
-            continue
-
-        value = value.lower().strip()
-
-        if value in ("kn", "kn-in", "kannada", "ಕನ್ನಡ"):
-            return "kn"
-
-        if value in ("en", "en-in", "english", "ಇಂಗ್ಲಿಷ್"):
-            return "en"
-
-    return "kn"
+    language = st.session_state.get("language", "kn")
+    return language if language in ("kn", "en") else "kn"
 
 
-def tr(key):
+def tx(key):
     return TEXT[get_language()].get(key, key)
 
 
-def display_district(name):
-    if get_language() == "kn":
-        return KANNADA_DISTRICTS.get(name, name)
-
+def display_name(name, translations=None):
+    if get_language() == "en":
+        return (translations or {}).get(name, name)
     return name
 
-
-def display_crop(name):
-    if get_language() == "kn":
-        return KANNADA_CROPS.get(name, name)
-
-    return name
-
-
-# =========================================================
-# FETCH FILTERS — ONLY ONE DEFINITION
-# =========================================================
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_filters():
-    try:
-        response = requests.get(
-            f"{API_BASE_URL}/mandi/filters",
-            timeout=30,
-        )
+    response = requests.get(
+        FILTERS_URL,
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
 
-        response.raise_for_status()
-        result = response.json()
+    payload = response.json()
 
-        if result.get("success"):
-            return result.get("data")
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid filters response.")
 
-        return None
+    if not payload.get("success", True):
+        raise ValueError(payload.get("message", "Unable to load filters."))
 
-    except requests.RequestException:
-        return None
+    data = payload.get("data", payload)
 
-    except ValueError:
-        return None
+    required = ("districts", "markets", "commodities")
+
+    for key in required:
+        if not isinstance(data.get(key), list):
+            raise ValueError(f"Invalid filter data: {key}")
+
+    return data
 
 
-# =========================================================
-# FETCH MARKET PRICES
-# =========================================================
-
-def fetch_prices(
-    district_id,
-    market_id,
-    commodity_id,
-    selected_date,
-):
+def fetch_prices(district_id, market_id, commodity_id, selected_date):
     payload = {
-        "district_id": district_id,
-        "market_id": market_id,
-        "commodity_id": commodity_id,
-        "selected_date": selected_date.isoformat(),
+        "district_id": int(district_id),
+        "market_id": int(market_id),
+        "commodity_id": int(commodity_id),
+        "date": selected_date.isoformat(),
     }
 
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/mandi/prices",
-            json=payload,
-            timeout=30,
-        )
+    response = requests.post(
+        PRICES_URL,
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
 
-        if response.status_code == 503:
-            return None, tr("no_price")
+    response.raise_for_status()
 
-        response.raise_for_status()
+    result = response.json()
 
-        result = response.json()
+    if not isinstance(result, dict):
+        raise ValueError("Invalid price response.")
 
-        if result.get("success"):
-            return result.get("data"), None
+    if not result.get("success", True):
+        raise ValueError(result.get("message", "Unable to fetch prices."))
 
-        return None, tr("no_price")
-
-    except requests.Timeout:
-        return None, tr("error")
-
-    except requests.RequestException:
-        return None, tr("error")
-
-    except ValueError:
-        return None, tr("error")
+    return result.get("data", result)
 
 
-# =========================================================
-# CHECK MARKET-SPECIFIC CROPS
-# =========================================================
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_market_reported_crops(
+def _check_one_commodity(
     district_id,
     market_id,
-    commodities,
+    commodity,
 ):
-    available_crops = []
+    try:
+        result = fetch_prices(
+            district_id,
+            market_id,
+            commodity["id"],
+            date.today(),
+        )
 
-    candidates = [
-        item
-        for item in commodities
-        if item.get("id") in PRIORITY_COMMODITY_IDS
-    ]
+        if result.get("has_report"):
+            return commodity
 
-    for commodity in candidates:
-        try:
-            response = requests.post(
-                f"{API_BASE_URL}/mandi/prices",
-                json={
-                    "district_id": district_id,
-                    "market_id": market_id,
-                    "commodity_id": commodity["id"],
-                    "selected_date": date.today().isoformat(),
-                },
-                timeout=20,
-            )
+    except Exception:
+        # A failed commodity request should not stop other checks.
+        return None
 
-            # Stop checking if AGMARKNET/service is unavailable.
-            if response.status_code == 503:
-                break
+    return None
 
-            response.raise_for_status()
-            result = response.json()
 
-            if not result.get("success"):
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_market_reported_crops(district_id, market_id, commodities):
+    """
+    Check commodities concurrently and return only crops
+    with reported prices in the selected market.
+    """
+
+    priority = {
+        name.lower()
+        for name in PRIORITY_COMMODITIES
+    }
+
+    selected_commodities = sorted(
+        commodities,
+        key=lambda item: (
+            item.get("name", "").lower() not in priority,
+            item.get("name", "").lower(),
+        ),
+    )
+
+    available = []
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(
+                _check_one_commodity,
+                district_id,
+                market_id,
+                commodity,
+            ): commodity
+            for commodity in selected_commodities
+        }
+
+        for future in as_completed(futures):
+            try:
+                commodity = future.result()
+
+                if commodity:
+                    available.append(commodity)
+
+            except Exception:
                 continue
 
-            data = result.get("data") or {}
-            records = data.get("records", [])
-
-            has_report = any(
-                record.get("has_report")
-                and any(
-                    day.get("reported")
-                    and day.get("price") is not None
-                    for day in record.get("daily_prices", [])
-                )
-                for record in records
-            )
-
-            if has_report:
-                available_crops.append(commodity)
-
-        except (
-            requests.RequestException,
-            ValueError,
-            TypeError,
-        ):
-            continue
-
-    return available_crops
-
-
-# =========================================================
-# DISPLAY PRICE RESULTS
-# =========================================================
+    return sorted(
+        available,
+        key=lambda item: item.get("name", "").lower(),
+    )
 
 
 def render_price_result(result):
-
-    records = result.get("records", [])
-
-    if not records or not result.get("has_report"):
-        st.info(tr("no_price"))
+    if not result:
+        st.warning(tx("no_data"))
         return
 
-    commodity_name = display_crop(result.get("commodity", ""))
+    if not result.get("has_report"):
+        st.info(result.get("message", tx("no_data")))
+        return
 
-    st.markdown(
-        f"""
-        <div class="price-result-heading">
-            <h3>{commodity_name}</h3>
-            <p>{result.get("market", "")}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.success(result.get("message", tx("latest")))
+
+    st.caption(
+        f"{result.get('district', '')} • "
+        f"{result.get('market', '')} • "
+        f"{result.get('commodity', '')}"
     )
 
-    for index, record in enumerate(records):
+    rows = []
 
-        st.markdown(f"### {record.get('variety', '—')}")
+    for record in result.get("records", []):
+        for daily in record.get("daily_prices", []):
+            if daily.get("price") is not None:
+                rows.append({
+                    tx("variety"): record.get("variety", "Unknown"),
+                    tx("reported_date"): daily.get("date"),
+                    tx("price"): daily.get("price"),
+                    tx("unit"): record.get("unit", "NR"),
+                })
 
-        latest_price = record.get("latest_price")
-        latest_date = record.get("latest_date")
+    if not rows:
+        st.info(tx("no_data"))
+        return
 
-        if latest_price is not None:
-            st.metric(
-                tr("latest"),
-                f"₹{latest_price:,.2f}",
-                help=f"{tr('date_col')}: {latest_date}",
-            )
+    df = pd.DataFrame(rows)
 
-        daily_prices = record.get("daily_prices", [])
+    st.subheader(tx("price_chart"))
 
-        table_rows = []
+    chart_df = df.copy()
 
-        for item in daily_prices:
-            price = item.get("price")
+    chart_df[tx("reported_date")] = pd.to_datetime(
+        chart_df[tx("reported_date")],
+        errors="coerce",
+    )
 
-            table_rows.append({
-                tr("date_col"): item.get("date", "—"),
-                tr("price"): (
-                    f"₹{price:,.2f}" if price is not None else "—"
-                ),
-                tr("status"): (
-                    tr("reported")
-                    if item.get("reported")
-                    else tr("not_reported")
-                ),
-            })
+    chart_df = chart_df.dropna(
+        subset=[tx("reported_date"), tx("price")]
+    )
 
-        if table_rows:
-            st.markdown(
-                "#### " + tr("date_col") + " / " + tr("price")
-            )
+    if not chart_df.empty:
+        chart_data = chart_df.pivot_table(
+            index=tx("reported_date"),
+            columns=tx("variety"),
+            values=tx("price"),
+            aggfunc="mean",
+        )
 
-            headers = list(table_rows[0].keys())
+        st.line_chart(chart_data)
 
-            header_cols = st.columns(len(headers))
+    st.subheader(tx("price_table"))
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+    )
 
-            for col, header in zip(header_cols, headers):
-                col.markdown(f"**{header}**")
+    st.caption(
+        f"{tx('source')}: {result.get('source', 'AGMARKNET')}"
+    )
+    st.caption(result.get("report_period", tx("period")))
 
-            for row in table_rows:
-                cols = st.columns(len(headers))
-
-                for col, header in zip(cols, headers):
-                    col.write(row[header])
-
-        chart_data = [
-            {
-                "Date": item.get("date"),
-                "Price": item.get("price"),
-            }
-            for item in daily_prices
-            if (
-                item.get("reported")
-                and item.get("price") is not None
-            )
-        ]
-
-        if chart_data:
-            chart_data.reverse()
-
-            st.markdown("#### Price trend")
-
-            st.line_chart(
-                chart_data,
-                x="Date",
-                y="Price",
-            )
-
-        if index < len(records) - 1:
-            st.divider()
-
-    st.caption(tr("source"))
-    st.info(tr("disclaimer"))
-
-
-# =========================================================
-# MAIN MANDI PAGE
-# =========================================================
 
 def render_mandi_page():
+    st.title(tx("title"))
+    st.write(tx("subtitle"))
 
-    # -----------------------------------------------------
-    # PAGE STYLING
-    # -----------------------------------------------------
+    with st.spinner(tx("loading")):
+        try:
+            filters = fetch_filters()
+        except Exception as error:
+            st.error(f"{tx('error')} {error}")
+            if st.button(tx("refresh")):
+                fetch_filters.clear()
+                st.rerun()
+            return
 
-    st.markdown(
-        """
-        <style>
-
-        .mandi-header {
-            background: linear-gradient(
-                120deg,
-                #e8f5e9,
-                #f1f8e9
-            );
-            padding: 28px;
-            border-radius: 18px;
-            margin-bottom: 25px;
-            border: 1px solid #d7ead8;
-        }
-
-        .mandi-header h1 {
-            color: #1b5e20;
-            font-size: 32px;
-            font-weight: 800;
-            margin: 0;
-        }
-
-        .mandi-header p {
-            color: #45634a;
-            font-size: 17px;
-            margin-top: 10px;
-            margin-bottom: 0;
-        }
-
-        .mandi-section-heading {
-            color: #263b2b;
-            font-size: 23px;
-            font-weight: 750;
-            margin-top: 15px;
-            margin-bottom: 18px;
-        }
-
-        .price-result-heading {
-            background: #edf7ed;
-            border-left: 5px solid #2e7d32;
-            border-radius: 10px;
-            padding: 16px 20px;
-            margin-top: 20px;
-            margin-bottom: 18px;
-        }
-
-        .price-result-heading h3 {
-            color: #1b5e20;
-            margin: 0;
-        }
-
-        .price-result-heading p {
-            color: #526b55;
-            margin-top: 5px;
-            margin-bottom: 0;
-        }
-
-        .stApp label {
-            font-size: 16px !important;
-            font-weight: 600 !important;
-        }
-
-        div[data-testid="stSelectbox"] {
-            margin-bottom: 15px;
-        }
-
-        div[data-testid="stSelectbox"] div[role="combobox"] {
-            min-height: 48px;
-            border-radius: 9px;
-        }
-
-        .st-key-mandi_search_button button {
-            background-color: #218838 !important;
-            color: #ffffff !important;
-            border: 1px solid #218838 !important;
-            border-radius: 10px !important;
-            width: 100% !important;
-            min-height: 54px !important;
-            font-size: 17px !important;
-            font-weight: 700 !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-            box-shadow: 0 3px 8px rgba(0,0,0,0.12) !important;
-        }
-
-        .st-key-mandi_search_button button:hover {
-            background-color: #176b2c !important;
-            color: #ffffff !important;
-        }
-
-        .st-key-mandi_search_button button p {
-            color: #ffffff !important;
-        }
-
-        div[data-testid="stMetric"] {
-            background: #f1f8f1;
-            border: 1px solid #d9ead9;
-            padding: 16px;
-            border-radius: 12px;
-        }
-
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # -----------------------------------------------------
-    # HEADER
-    # -----------------------------------------------------
-
-    st.markdown(
-        f"""
-        <div class="mandi-header">
-            <h1>{tr("title")}</h1>
-            <p>{tr("subtitle")}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # -----------------------------------------------------
-    # LOAD FILTERS
-    # -----------------------------------------------------
-
-    with st.spinner(tr("loading_filters")):
-        filters = fetch_filters()
-
-    if not filters:
-        st.error(tr("error"))
-        return
-
-    districts = filters.get("districts", [])
-    markets = filters.get("markets", [])
-    commodities = filters.get("commodities", [])
+    districts = filters["districts"]
+    markets = filters["markets"]
+    commodities = filters["commodities"]
 
     if not districts:
-        st.warning(tr("no_markets"))
+        st.warning(tx("no_district"))
         return
 
-    # -----------------------------------------------------
-    # DISTRICT SELECT
-    # -----------------------------------------------------
-
-    st.markdown(
-        f"""
-        <div class="mandi-section-heading">
-            📍 {tr("district")}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    district_names = [
-        item["name"]
+    district_options = {
+        display_name(item["name"], DISTRICT_TRANSLATIONS): item["id"]
         for item in districts
-        if item.get("name")
-    ]
+    }
 
-    if not district_names:
-        st.warning(tr("no_markets"))
-        return
-
-    district_name = st.selectbox(
-        tr("district"),
-        district_names,
-        format_func=display_district,
+    district_label = st.selectbox(
+        tx("district"),
+        list(district_options.keys()),
         key="mandi_district",
     )
 
-    selected_district = next(
-        item
-        for item in districts
-        if item["name"] == district_name
-    )
-
-    district_id = selected_district["id"]
-
-    # -----------------------------------------------------
-    # MARKET SELECT
-    # -----------------------------------------------------
+    district_id = district_options[district_label]
 
     district_markets = [
         item
@@ -669,122 +395,90 @@ def render_mandi_page():
     ]
 
     if not district_markets:
-        st.warning(tr("no_markets"))
+        st.warning(tx("no_market"))
         return
 
-    market_names = [
-        item["name"]
+    market_options = {
+        item["name"]: item["id"]
         for item in district_markets
-        if item.get("name")
-    ]
-
-    if not market_names:
-        st.warning(tr("no_markets"))
-        return
-
-    market_name = st.selectbox(
-        tr("market"),
-        market_names,
-        key=f"mandi_market_{district_id}",
-    )
-
-    selected_market = next(
-        item
-        for item in district_markets
-        if item["name"] == market_name
-    )
-
-    market_id = selected_market["id"]
-
-    # -----------------------------------------------------
-    # MARKET-SPECIFIC CROPS
-    # -----------------------------------------------------
-
-    st.divider()
-
-    cache_key = f"mandi_crops_{district_id}_{market_id}"
-
-    if cache_key not in st.session_state:
-
-        with st.spinner(tr("loading_crops")):
-            available_crops = get_market_reported_crops(
-                district_id,
-                market_id,
-                commodities,
-            )
-
-        st.session_state[cache_key] = available_crops
-
-    available_crops = st.session_state[cache_key]
-
-    if not available_crops:
-        st.warning(tr("no_crops"))
-        return
-
-    st.caption(tr("limited"))
-
-    crop_options = {
-        item["name"]: item
-        for item in available_crops
-        if item.get("name")
     }
 
-    if not crop_options:
-        st.warning(tr("no_crops"))
-        return
-
-    crop_name = st.selectbox(
-        tr("crop"),
-        list(crop_options.keys()),
-        format_func=display_crop,
-        key=f"mandi_crop_{district_id}_{market_id}",
+    market_label = st.selectbox(
+        tx("market"),
+        list(market_options.keys()),
+        key="mandi_market",
     )
 
-    selected_commodity = crop_options[crop_name]
-    commodity_id = selected_commodity["id"]
+    market_id = market_options[market_label]
 
-    # -----------------------------------------------------
-    # DATE SELECT
-    # -----------------------------------------------------
+    crop_cache_key = (
+        int(district_id),
+        int(market_id),
+    )
 
-    today = date.today()
+    if st.session_state.get("mandi_crop_cache_key") != crop_cache_key:
+        st.session_state.pop("mandi_selected_crop", None)
+        st.session_state["mandi_crop_cache_key"] = crop_cache_key
+
+    with st.spinner(tx("checking")):
+        try:
+            available_crops = get_market_reported_crops(
+                int(district_id),
+                int(market_id),
+                commodities,
+            )
+        except Exception as error:
+            st.error(f"{tx('error')} {error}")
+            return
+
+    if not available_crops:
+        st.info(tx("no_crop"))
+        return
+
+    crop_options = {
+        display_name(item["name"], CROP_TRANSLATIONS): item["id"]
+        for item in available_crops
+    }
+
+    crop_label = st.selectbox(
+        tx("crop"),
+        list(crop_options.keys()),
+        key="mandi_selected_crop",
+    )
+
+    commodity_id = crop_options[crop_label]
 
     selected_date = st.date_input(
-        tr("date"),
-        value=today,
-        min_value=today - timedelta(days=30),
-        max_value=today,
+        tx("date"),
+        value=date.today(),
+        min_value=date.today() - timedelta(days=30),
+        max_value=date.today(),
         key="mandi_selected_date",
     )
 
-    st.caption(tr("reference"))
+    if st.button(tx("fetch"), type="primary", use_container_width=True):
+        try:
+            with st.spinner(tx("fetching")):
+                result = fetch_prices(
+                    int(district_id),
+                    int(market_id),
+                    int(commodity_id),
+                    selected_date,
+                )
 
-    # -----------------------------------------------------
-    # SEARCH BUTTON
-    # -----------------------------------------------------
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    if st.button(
-        tr("search"),
-        type="primary",
-        use_container_width=True,
-        key="mandi_search_button",
-    ):
-
-        with st.spinner(tr("loading_prices")):
-            result, error = fetch_prices(
-                district_id,
-                market_id,
-                commodity_id,
-                selected_date,
-            )
-
-        if error:
-            st.warning(error)
-
-        elif result:
             render_price_result(result)
 
-        else:
-            st.info(tr("no_price"))
+        except requests.Timeout:
+            st.error("Request timed out. Please try again.")
+
+        except requests.RequestException as error:
+            st.error(f"{tx('error')} {error}")
+
+        except Exception as error:
+            st.error(f"{tx('error')} {error}")
+
+    if st.button(tx("refresh")):
+        fetch_filters.clear()
+        get_market_reported_crops.clear()
+        st.session_state.pop("mandi_crop_cache_key", None)
+        st.rerun()

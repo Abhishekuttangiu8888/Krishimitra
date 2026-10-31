@@ -1,9 +1,9 @@
+
 import requests
 from functools import lru_cache
-from datetime import date, datetime
+from datetime import date
+from typing import Optional
 
-
-AGMARKNET_HOME = "https://agmarknet.gov.in/"
 
 AGMARKNET_API_BASE = "https://api.agmarknet.gov.in/v1"
 
@@ -14,6 +14,8 @@ COMMODITY_PRICE_URL = (
 )
 
 KARNATAKA_STATE_ID = 16
+
+REQUEST_TIMEOUT = (5, 15)
 
 
 class MandiDataError(Exception):
@@ -39,32 +41,32 @@ def _create_session():
 
 @lru_cache(maxsize=1)
 def _fetch_filter_data():
-    session = None
+    """Fetch and cache the original AGMARKNET filter response."""
+
+    session = _create_session()
 
     try:
-        session = _create_session()
-
         response = session.get(
             FILTERS_URL,
-            timeout=(5, 20),
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
 
         payload = response.json()
 
-        if not payload.get("status"):
+        if not isinstance(payload, dict) or not payload.get("status"):
             raise MandiDataError(
                 "AGMARKNET filters could not be loaded."
             )
 
         data = payload.get("data", {})
 
-        required_keys = [
+        required_keys = (
             "state_data",
             "district_data",
             "market_data",
             "cmdt_data",
-        ]
+        )
 
         for key in required_keys:
             if not isinstance(data.get(key), list):
@@ -77,84 +79,129 @@ def _fetch_filter_data():
     except MandiDataError:
         raise
 
+    except requests.Timeout as error:
+        raise MandiDataError(
+            "AGMARKNET filter request timed out."
+        ) from error
+
     except (requests.RequestException, ValueError) as error:
         raise MandiDataError(
             "Unable to retrieve AGMARKNET filters."
         ) from error
 
     finally:
-        if session:
-            session.close()
+        session.close()
 
 
-def get_mandi_filters(refresh=False):
-    if refresh:
-        _fetch_filter_data.cache_clear()
+@lru_cache(maxsize=1)
+def _build_mandi_filters():
+    """Build and cache the processed Karnataka filters."""
 
     data = _fetch_filter_data()
 
-    states = data["state_data"]
-    districts = data["district_data"]
-    markets = data["market_data"]
-    commodities = data["cmdt_data"]
-
     karnataka_districts = [
         item
-        for item in districts
+        for item in data["district_data"]
         if item.get("state_id") == KARNATAKA_STATE_ID
     ]
 
     district_ids = {
         item["id"]
         for item in karnataka_districts
+        if item.get("id") is not None
     }
 
     karnataka_markets = [
         item
-        for item in markets
+        for item in data["market_data"]
         if (
             item.get("state_id") == KARNATAKA_STATE_ID
             and item.get("district_id") in district_ids
         )
     ]
 
+    districts = [
+        {
+            "id": item["id"],
+            "name": item["district_name"],
+            "state_id": item.get("state_id"),
+        }
+        for item in karnataka_districts
+        if item.get("id") is not None
+    ]
+
+    markets = [
+        {
+            "id": item["id"],
+            "name": (item.get("mkt_name") or "").strip(),
+            "district_id": item.get("district_id"),
+            "state_id": item.get("state_id"),
+        }
+        for item in karnataka_markets
+        if item.get("id") is not None
+    ]
+
+    commodities = [
+        {
+            "id": item["cmdt_id"],
+            "name": (item.get("cmdt_name") or "").strip(),
+            "group_id": item.get("cmdt_group_id"),
+        }
+        for item in data["cmdt_data"]
+        if item.get("cmdt_id") is not None
+    ]
+
+    states = [
+        {
+            "id": item["state_id"],
+            "name": item["state_name"],
+        }
+        for item in data["state_data"]
+        if item.get("state_id") != 100000
+    ]
+
     return {
-        "states": [
-            {
-                "id": item["state_id"],
-                "name": item["state_name"],
-            }
-            for item in states
-            if item.get("state_id") != 100000
-        ],
+        "states": states,
+        "districts": districts,
+        "markets": markets,
+        "commodities": commodities,
 
-        "districts": [
-            {
-                "id": item["id"],
-                "name": item["district_name"],
-                "state_id": item.get("state_id"),
-            }
-            for item in karnataka_districts
-        ],
-
-        "markets": [
-            {
-                "id": item["id"],
-                "name": item["mkt_name"].strip(),
-                "district_id": item.get("district_id"),
-                "state_id": item.get("state_id"),
-            }
-            for item in karnataka_markets
-        ],
-
-        "commodities": [
-            {
-                "id": item["cmdt_id"],
-                "name": item["cmdt_name"].strip(),
-                "group_id": item.get("cmdt_group_id"),
-            }
+        # Internal lookup dictionaries for fast validation.
+        "_district_lookup": {
+            item["id"]: item["name"]
+            for item in districts
+        },
+        "_market_lookup": {
+            item["id"]: item
+            for item in markets
+        },
+        "_commodity_lookup": {
+            item["id"]: item
             for item in commodities
-        ],
+        },
+    }
+
+
+def get_mandi_filters(refresh=False):
+    """
+    Return Karnataka districts, markets and commodities.
+
+    The first call fetches AGMARKNET filters.
+    Subsequent calls use cached processed data.
+    """
+
+    if refresh:
+        _build_mandi_filters.cache_clear()
+        _fetch_filter_data.cache_clear()
+
+    cached = _build_mandi_filters()
+
+    # Do not expose internal lookup dictionaries to the frontend.
+    return {
+        "states": cached["states"],
+        "districts": cached["districts"],
+        "markets": cached["markets"],
+        "commodities": cached["commodities"],
     }
 
 
@@ -169,53 +216,36 @@ def get_mandi_prices(
     district_id: int,
     market_id: int,
     commodity_id: int,
-    date: date | None = None,
+    date: Optional[date] = None,
 ):
     """
-    Fetch the last week's reported prices for a Karnataka market
+    Fetch the available last-week prices for a Karnataka market
     and commodity.
 
-    Note:
-    AGMARKNET's confirmed lastweek endpoint does not accept a
-    selected historical date. It returns its available last-week
-    data instead.
+    AGMARKNET's lastweek endpoint does not accept a selected
+    historical date. The date is retained for API compatibility
+    and returned as metadata.
     """
 
-    # Validate the selected market and commodity against Karnataka filters.
-    filters = get_mandi_filters()
+    filters = _build_mandi_filters()
 
-    market = next(
-        (
-            item for item in filters["markets"]
-            if item["id"] == market_id
-            and item["district_id"] == district_id
-        ),
-        None,
-    )
+    market = filters["_market_lookup"].get(market_id)
 
-    if not market:
+    if not market or market["district_id"] != district_id:
         raise MandiDataError(
             "The selected market does not belong to this Karnataka district."
         )
 
-    commodity = next(
-        (
-            item for item in filters["commodities"]
-            if item["id"] == commodity_id
-        ),
-        None,
-    )
+    commodity = filters["_commodity_lookup"].get(commodity_id)
 
     if not commodity:
         raise MandiDataError(
             "The selected commodity was not found."
         )
 
-    session = None
+    session = _create_session()
 
     try:
-        session = _create_session()
-
         params = {
             "marketId": market_id,
             "stateId": KARNATAKA_STATE_ID,
@@ -225,41 +255,57 @@ def get_mandi_prices(
         response = session.get(
             COMMODITY_PRICE_URL,
             params=params,
-            timeout=(5, 20),
+            timeout=REQUEST_TIMEOUT,
         )
 
         response.raise_for_status()
 
         payload = response.json()
 
+        if not isinstance(payload, dict):
+            raise MandiDataError(
+                "AGMARKNET returned an invalid response."
+            )
+
         if not payload.get("success"):
             raise MandiDataError(
                 payload.get("message", "AGMARKNET returned no data.")
             )
 
-        raw_rows = payload.get("data", [])
+        raw_rows = payload.get("data") or []
+        columns = payload.get("columns") or []
 
-        columns = payload.get("columns", [])
+        if not isinstance(raw_rows, list) or not isinstance(columns, list):
+            raise MandiDataError(
+                "AGMARKNET returned an invalid price data structure."
+            )
 
         date_columns = [
             column["key"]
             for column in columns
-            if column.get("key")
-            and column["key"] not in ("variety", "unitOfPrice")
+            if (
+                isinstance(column, dict)
+                and column.get("key")
+                and column["key"] not in ("variety", "unitOfPrice")
+            )
         ]
 
         records = []
 
         for row in raw_rows:
+            if not isinstance(row, dict):
+                continue
+
             daily_prices = []
 
             for date_key in date_columns:
                 value = row.get(date_key)
 
-                if _is_numeric_price(value):
-                    price = float(value)
-                else:
-                    price = None
+                price = (
+                    float(value)
+                    if _is_numeric_price(value)
+                    else None
+                )
 
                 daily_prices.append({
                     "date": date_key,
@@ -268,19 +314,16 @@ def get_mandi_prices(
                 })
 
             available_prices = [
-                item for item in daily_prices
+                item
+                for item in daily_prices
                 if item["price"] is not None
             ]
 
-            latest = (
-                available_prices[0]
-                if available_prices
-                else None
-            )
+            latest = available_prices[0] if available_prices else None
 
             records.append({
-                "variety": row.get("variety", "Unknown"),
-                "unit": row.get("unitOfPrice", "NR"),
+                "variety": row.get("variety") or "Unknown",
+                "unit": row.get("unitOfPrice") or "NR",
                 "daily_prices": daily_prices,
                 "latest_price": latest["price"] if latest else None,
                 "latest_date": latest["date"] if latest else None,
@@ -295,11 +338,7 @@ def get_mandi_prices(
         return {
             "source": "AGMARKNET",
             "state": "Karnataka",
-            "district": next(
-                item["name"]
-                for item in filters["districts"]
-                if item["id"] == district_id
-            ),
+            "district": filters["_district_lookup"][district_id],
             "market": market["name"],
             "commodity": commodity["name"],
             "market_id": market_id,
@@ -335,5 +374,4 @@ def get_mandi_prices(
         ) from error
 
     finally:
-        if session:
-            session.close()
+        session.close()

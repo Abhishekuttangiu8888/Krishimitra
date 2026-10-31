@@ -1,9 +1,15 @@
 
+import hashlib
+
 import requests
 import streamlit as st
 
+from frontend.voice_interface import transcribe_audio
+
+
 API_BASE = "http://127.0.0.1:8000/api"
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
+
 
 TEXT = {
     "en": {
@@ -12,7 +18,11 @@ TEXT = {
         "upload": "Upload crop image",
         "camera": "Take a crop photo",
         "crop": "Which crop is affected?",
-        "crop_placeholder": "Select or enter crop name",
+        "crop_placeholder": "Enter crop name",
+        "crop_voice": "🎤 Speak crop name",
+        "description_voice": "🎤 Describe the crop problem by voice",
+        "voice_crop_success": "Crop name recognized",
+        "voice_description_success": "Crop description recognized",
         "part": "Which part is affected?",
         "parts": [
             "Leaves",
@@ -37,7 +47,7 @@ TEXT = {
         "analyzing": "Analyzing your crop image...",
         "result": "AI assessment",
         "warning": "This is a preliminary AI assessment, not a confirmed diagnosis.",
-        "missing_crop": "Please select or enter the crop name.",
+        "missing_crop": "Please enter the crop name.",
         "missing_image": "Please upload or capture a crop image.",
         "large_image": "Image must be 5 MB or smaller.",
         "error": "Something went wrong",
@@ -47,14 +57,20 @@ TEXT = {
         "saved_crops": "Saved crops",
         "no_profile": "Farmer profile could not be loaded. You can still enter your crop below.",
         "no_results": "No analysis is available yet.",
+        "recognizing": "Recognizing your voice...",
     },
+
     "kn": {
         "title": "🌿 ಬೆಳೆ ರೋಗ ಪತ್ತೆ",
         "subtitle": "ಬೆಳೆಯ ಫೋಟೋ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ AI ಮೂಲಕ ಪ್ರಾಥಮಿಕ ಪರಿಶೀಲನೆ ಪಡೆಯಿರಿ.",
         "upload": "ಬೆಳೆಯ ಫೋಟೋ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ",
         "camera": "ಕ್ಯಾಮೆರಾದಲ್ಲಿ ಫೋಟೋ ತೆಗೆಯಿರಿ",
         "crop": "ಯಾವ ಬೆಳೆಗೆ ಸಮಸ್ಯೆಯಾಗಿದೆ?",
-        "crop_placeholder": "ಬೆಳೆಯ ಹೆಸರನ್ನು ಆಯ್ಕೆಮಾಡಿ ಅಥವಾ ನಮೂದಿಸಿ",
+        "crop_placeholder": "ಬೆಳೆಯ ಹೆಸರನ್ನು ನಮೂದಿಸಿ",
+        "crop_voice": "🎤 ಬೆಳೆಯ ಹೆಸರನ್ನು ಧ್ವನಿಯ ಮೂಲಕ ಹೇಳಿ",
+        "description_voice": "🎤 ಬೆಳೆಯ ಸಮಸ್ಯೆಯನ್ನು ಧ್ವನಿಯ ಮೂಲಕ ವಿವರಿಸಿ",
+        "voice_crop_success": "ಬೆಳೆಯ ಹೆಸರು ಗುರುತಿಸಲಾಗಿದೆ",
+        "voice_description_success": "ಬೆಳೆಯ ವಿವರಣೆ ಗುರುತಿಸಲಾಗಿದೆ",
         "part": "ಯಾವ ಭಾಗಕ್ಕೆ ಸಮಸ್ಯೆಯಾಗಿದೆ?",
         "parts": [
             "ಎಲೆಗಳು",
@@ -89,6 +105,7 @@ TEXT = {
         "saved_crops": "ಉಳಿಸಿದ ಬೆಳೆಗಳು",
         "no_profile": "ರೈತರ ಪ್ರೊಫೈಲ್ ಲೋಡ್ ಆಗಲಿಲ್ಲ. ಕೆಳಗೆ ಬೆಳೆಯ ಹೆಸರನ್ನು ನಮೂದಿಸಬಹುದು.",
         "no_results": "ಇನ್ನೂ ಯಾವುದೇ ಪರಿಶೀಲನೆ ಲಭ್ಯವಿಲ್ಲ.",
+        "recognizing": "ನಿಮ್ಮ ಧ್ವನಿಯನ್ನು ಗುರುತಿಸಲಾಗುತ್ತಿದೆ...",
     },
 }
 
@@ -168,6 +185,30 @@ def render_profile(profile, language):
             )
 
 
+def process_voice_input(audio_file, state_key, processed_key, language):
+    if audio_file is None:
+        return
+
+    audio_bytes = audio_file.getvalue()
+
+    if not audio_bytes:
+        return
+
+    audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+
+    # Prevent the same recording from being transcribed repeatedly.
+    if st.session_state.get(processed_key) == audio_hash:
+        return
+
+    with st.spinner(TEXT[language]["recognizing"]):
+        transcript = transcribe_audio(audio_file)
+
+    if transcript:
+        st.session_state[state_key] = transcript
+        st.session_state[processed_key] = audio_hash
+        st.success(transcript)
+
+
 def analyze_image(
     image_bytes,
     mime_type,
@@ -233,7 +274,9 @@ def render_disease_result(result, language):
 
     st.warning(t["warning"])
 
-    st.markdown(result.get("assessment", "No assessment returned."))
+    st.markdown(
+        result.get("assessment", "No assessment returned.")
+    )
 
     st.caption(
         "The AI result should be checked with a qualified "
@@ -258,32 +301,30 @@ def render_disease_page():
 
     st.divider()
 
-    saved_crops = get_saved_crops(profile)
-
+    # Crop name: voice input and manual typing.
     st.subheader(t["crop"])
 
-    if saved_crops:
-        crop_options = [""] + saved_crops
+    crop_audio = st.audio_input(
+        t["crop_voice"],
+        sample_rate=16000,
+        key="km_disease_crop_audio",
+    )
 
-        selected_crop = st.selectbox(
-            t["crop_placeholder"],
-            crop_options,
-            key="km_disease_saved_crop",
-        )
+    process_voice_input(
+        crop_audio,
+        "km_disease_crop",
+        "km_disease_crop_audio_processed",
+        language,
+    )
 
-        custom_crop = st.text_input(
-            "Other crop / ಬೇರೆ ಬೆಳೆ",
-            key="km_disease_custom_crop",
-        )
+    crop_name = st.text_input(
+        t["crop_placeholder"],
+        key="km_disease_crop",
+    )
 
-        crop_name = custom_crop.strip() or selected_crop
+    st.divider()
 
-    else:
-        crop_name = st.text_input(
-            t["crop_placeholder"],
-            key="km_disease_crop",
-        )
-
+    # Crop image upload or camera.
     st.subheader(t["upload"])
 
     uploaded_image = st.file_uploader(
@@ -306,6 +347,9 @@ def render_disease_page():
             use_container_width=True,
         )
 
+    st.divider()
+
+    # Affected plant part.
     st.subheader(t["part"])
 
     affected_part = st.selectbox(
@@ -314,18 +358,36 @@ def render_disease_page():
         key="km_disease_part",
     )
 
+    # Symptoms: voice input and manual typing.
+    st.subheader(t["symptoms"])
+
+    description_audio = st.audio_input(
+        t["description_voice"],
+        sample_rate=16000,
+        key="km_disease_description_audio",
+    )
+
+    process_voice_input(
+        description_audio,
+        "km_disease_symptoms",
+        "km_disease_description_audio_processed",
+        language,
+    )
+
     symptoms = st.text_area(
         t["symptoms"],
         placeholder=t["symptoms_placeholder"],
         key="km_disease_symptoms",
     )
 
+    # Duration.
     duration = st.selectbox(
         t["duration"],
         t["durations"],
         key="km_disease_duration",
     )
 
+    # Analyze.
     if st.button(
         t["analyze"],
         type="primary",
